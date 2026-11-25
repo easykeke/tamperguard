@@ -1,0 +1,11 @@
+.tmp/
+bin/
+dist/
+*.db
+*.db-journal
+*.db-wal
+*.test
+coverage.out
+go.sum.bak
+# Generated per-kernel: create with `make vmlinux` (needs bpftool).
+bpf/vmlinux.h

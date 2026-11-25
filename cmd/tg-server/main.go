@@ -1,0 +1,303 @@
+// Command tg-server is the TamperGuard control plane.
+//
+// Subcommands:
+//
+//	tg-server init            generate CA, keys, admin password, bootstrap tokens
+//	tg-server serve           run the control plane
+//	tg-server bootstrap-token issue another one-time enrolment token
+package main
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/pem"
+	"flag"
+	"fmt"
+	"log/slog"
+	"math/big"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/easykeke/tamperguard/internal/config"
+	"github.com/easykeke/tamperguard/internal/idgen"
+	"github.com/easykeke/tamperguard/internal/server"
+	"github.com/easykeke/tamperguard/internal/store"
+	"github.com/easykeke/tamperguard/internal/token"
+	webui "github.com/easykeke/tamperguard/web"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	var err error
+	switch os.Args[1] {
+	case "init":
+		err = cmdInit(os.Args[2:])
+	case "serve":
+		err = cmdServe(os.Args[2:])
+	case "bootstrap-token":
+		err = cmdBootstrapToken(os.Args[2:])
+	case "-h", "--help", "help":
+		usage()
+		return
+	default:
+		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
+		usage()
+		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+func usage() {
+	fmt.Fprint(os.Stderr, `TamperGuard control plane
+
+  tg-server init [--data-dir DIR] [--listen ADDR]
+  tg-server serve [--data-dir DIR]
+  tg-server bootstrap-token [--data-dir DIR] [--role protect|publish]
+`)
+}
+
+func cmdInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	listen := fs.String("listen", config.DefaultListenAddr, "listen address")
+	_ = fs.Parse(args)
+
+	if err := os.MkdirAll(filepath.Join(*dataDir, config.KeysDir), 0o750); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(*dataDir, config.ServerConfigFile)); err == nil {
+		return fmt.Errorf("%s already initialised (remove it to re-initialise)", *dataDir)
+	}
+
+	// CA (Ed25519).
+	caPub, caPriv, err := token.GenerateKey()
+	if err != nil {
+		return err
+	}
+	caCert, caDER, err := makeCA(caPub, caPriv)
+	if err != nil {
+		return err
+	}
+	if err := config.WriteCertPEM(filepath.Join(*dataDir, config.KeysDir, config.CACertFile), caDER); err != nil {
+		return err
+	}
+	if err := config.WriteEd25519Private(filepath.Join(*dataDir, config.KeysDir, config.CAKeyFile), caPriv); err != nil {
+		return err
+	}
+
+	// Server TLS certificate signed by the CA.
+	serverPub, serverPriv, err := token.GenerateKey()
+	if err != nil {
+		return err
+	}
+	serverDER, err := makeServerCert(serverPub, caCert, caPriv)
+	if err != nil {
+		return err
+	}
+	if err := config.WriteCertPEM(filepath.Join(*dataDir, config.KeysDir, config.ServerCertFile), serverDER); err != nil {
+		return err
+	}
+	if err := config.WriteEd25519Private(filepath.Join(*dataDir, config.KeysDir, config.ServerKeyFile), serverPriv); err != nil {
+		return err
+	}
+
+	// Token and policy signing keys.
+	tokenPriv, err := genKeyFile(filepath.Join(*dataDir, config.KeysDir, config.TokenSignFile),
+		filepath.Join(*dataDir, config.KeysDir, config.IssuerPubFile))
+	if err != nil {
+		return err
+	}
+	policyPriv, err := genKeyFile(filepath.Join(*dataDir, config.KeysDir, config.PolicySignFile),
+		filepath.Join(*dataDir, config.KeysDir, config.PolicyPubFile))
+	if err != nil {
+		return err
+	}
+	_ = tokenPriv
+	_ = policyPriv
+
+	// Session key and admin password.
+	sessKey := make([]byte, 32)
+	if _, err := rand.Read(sessKey); err != nil {
+		return err
+	}
+	adminPassword := randomPassword(24)
+	pwHash, err := server.HashPassword(adminPassword)
+	if err != nil {
+		return err
+	}
+
+	cfg := config.DefaultServer(*dataDir)
+	cfg.ListenAddr = *listen
+	cfg.SessionKey = base64.StdEncoding.EncodeToString(sessKey)
+	cfg.AdminPasswordHash = pwHash
+	if err := config.SaveServer(cfg); err != nil {
+		return err
+	}
+
+	// Create the database and one bootstrap token per role.
+	st, err := store.Open(filepath.Join(*dataDir, "tamperguard.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	protectTok := idgen.Token(24)
+	publishTok := idgen.Token(24)
+	if err := st.AddBootstrapToken(token.DigestString(protectTok), "protect"); err != nil {
+		return err
+	}
+	if err := st.AddBootstrapToken(token.DigestString(publishTok), "publish"); err != nil {
+		return err
+	}
+
+	fmt.Printf(`
+TamperGuard initialised in %s
+
+  Admin user      : %s
+  Admin password  : %s
+  Bootstrap token (protect) : %s
+  Bootstrap token (publish) : %s
+
+The password and tokens are printed exactly once. Store them now.
+Start the server with: tg-server serve --data-dir %s
+`, *dataDir, cfg.AdminUser, adminPassword, protectTok, publishTok, *dataDir)
+	return nil
+}
+
+func cmdServe(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	_ = fs.Parse(args)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+
+	cfg, err := config.LoadServer(*dataDir)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(filepath.Join(*dataDir, "tamperguard.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	srv, err := server.New(cfg, st, server.Options{Logger: logger, UI: webui.FS()})
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return srv.Serve(ctx)
+}
+
+func cmdBootstrapToken(args []string) error {
+	fs := flag.NewFlagSet("bootstrap-token", flag.ExitOnError)
+	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	role := fs.String("role", "protect", "protect or publish")
+	_ = fs.Parse(args)
+	if *role != "protect" && *role != "publish" {
+		return fmt.Errorf("role must be protect or publish")
+	}
+	if _, err := config.LoadServer(*dataDir); err != nil {
+		return err
+	}
+	st, err := store.Open(filepath.Join(*dataDir, "tamperguard.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	tok := idgen.Token(24)
+	if err := st.AddBootstrapToken(token.DigestString(tok), *role); err != nil {
+		return err
+	}
+	fmt.Printf("bootstrap token (%s role, valid for one use): %s\n", *role, tok)
+	return nil
+}
+
+// ---------- key and certificate helpers ----------
+
+func genKeyFile(privPath, pubPath string) (ed25519.PrivateKey, error) {
+	pub, priv, err := token.GenerateKey()
+	if err != nil {
+		return nil, err
+	}
+	if err := config.WriteEd25519Private(privPath, priv); err != nil {
+		return nil, err
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, err
+	}
+	return priv, config.WriteFileAtomic(pubPath,
+		pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o644)
+}
+
+func makeCA(pub ed25519.PublicKey, priv ed25519.PrivateKey) (*x509.Certificate, []byte, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "TamperGuard CA", Organization: []string{"TamperGuard"}},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.AddDate(10, 0, 0),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		return nil, nil, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	return cert, der, err
+}
+
+func makeServerCert(pub ed25519.PublicKey, ca *x509.Certificate, caPriv ed25519.PrivateKey) ([]byte, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	if err != nil {
+		return nil, err
+	}
+	host, _ := os.Hostname()
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "tg-server", Organization: []string{"TamperGuard"}},
+		NotBefore:    now.Add(-5 * time.Minute),
+		NotAfter:     now.AddDate(5, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost", host, "tg-server"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+	return x509.CreateCertificate(rand.Reader, tmpl, ca, pub, caPriv)
+}
+
+func randomPassword(n int) string {
+	const charset = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	out := make([]byte, n)
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		panic(err)
+	}
+	for i := range out {
+		out[i] = charset[int(buf[i])%len(charset)]
+	}
+	return string(out)
+}

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>TamperGuard 管理端</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <noscript>
+    <div class="noscript">TamperGuard 管理端需要启用 JavaScript 才能运行。</div>
+  </noscript>
+
+  <!-- 单页应用挂载点：登录页、管理端骨架与各视图均由 app.js 渲染 -->
+  <div id="app">
+    <div class="boot">正在加载…</div>
+  </div>
+
+  <!-- 右上角通知容器：脱离 #app，切换视图时不被销毁 -->
+  <div id="toasts" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

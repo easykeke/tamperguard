@@ -1,0 +1,311 @@
+package agent
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/easykeke/tamperguard/internal/audit"
+	"github.com/easykeke/tamperguard/internal/config"
+	"github.com/easykeke/tamperguard/internal/enforcer"
+	"github.com/easykeke/tamperguard/internal/policy"
+)
+
+// Agent is the protect-side runtime: it syncs policy, feeds the enforcer and
+// ships a tamper-evident audit chain to the control plane.
+type Agent struct {
+	state  *config.AgentState
+	client *Client
+	enf    enforcer.Enforcer
+	log    *slog.Logger
+	writer *audit.Writer
+	file   *os.File
+
+	mu           sync.Mutex
+	pending      []audit.Record
+	policyDigest string
+	unhealthy    bool
+}
+
+// New builds an agent from persisted state.
+func New(state *config.AgentState, enf enforcer.Enforcer, logger *slog.Logger) (*Agent, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	priv, err := parsePrivateKey(state.KeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(state.StateDir, 0o750); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(state.StateDir, "audit.log")
+	writer, f, err := audit.OpenFile(path, state.AgentID, priv)
+	if err != nil {
+		return nil, err
+	}
+	client, err := NewClient(state)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &Agent{state: state, client: client, enf: enf, log: logger, writer: writer, file: f}, nil
+}
+
+func parsePrivateKey(keyPEM string) (ed25519.PrivateKey, error) {
+	block, _ := pem.Decode([]byte(keyPEM))
+	if block == nil {
+		return nil, errors.New("agent: private key is not PEM")
+	}
+	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	priv, ok := k.(ed25519.PrivateKey)
+	if !ok {
+		return nil, errors.New("agent: private key is not Ed25519")
+	}
+	return priv, nil
+}
+
+func parsePublicKeyHex(s string) (ed25519.PublicKey, error) {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("agent: public key has %d bytes, want %d", len(b), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(b), nil
+}
+
+// Run drives the agent until ctx is cancelled.
+func (a *Agent) Run(ctx context.Context) error {
+	interval := time.Duration(a.state.PollSeconds) * time.Second
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	a.log.Info("agent starting", "agent", a.state.AgentID, "role", a.state.Role,
+		"enforcer", a.enf.Name(), "degraded", a.enf.Capability().Degraded)
+
+	// First sync immediately so a restart applies the current policy fast.
+	a.tick(ctx)
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			a.shutdown()
+			return nil
+		case <-t.C:
+			a.tick(ctx)
+		}
+	}
+}
+
+func (a *Agent) tick(ctx context.Context) {
+	a.drainEvents()
+	if err := a.sync(ctx); err != nil {
+		a.log.Warn("heartbeat failed", "err", err)
+	}
+	if err := a.flush(ctx); err != nil {
+		a.log.Warn("audit upload failed", "err", err)
+	}
+}
+
+func (a *Agent) sync(ctx context.Context) error {
+	capb := a.enf.Capability()
+	capsJSON, _ := json.Marshal(capb)
+	healthErr := a.enf.Health()
+
+	a.mu.Lock()
+	digest := a.policyDigest
+	a.mu.Unlock()
+
+	resp, err := a.client.Heartbeat(ctx, HeartbeatRequest{
+		Status:          "online",
+		Enforcer:        a.enf.Name(),
+		PolicyDigest:    digest,
+		Caps:            capsJSON,
+		Degraded:        capb.Degraded,
+		AgentVersion:    Version,
+		EnforcerHealthy: healthErr == nil,
+		AuditSeq:        a.writer.NextSeq() - 1,
+	})
+	if err != nil {
+		return err
+	}
+
+	revs := enforcer.RevocationSet{}
+	for _, r := range resp.Revocations {
+		revs[r.Kind+":"+r.Value] = true
+	}
+
+	var snap *policy.Snapshot
+	if resp.Policy != nil {
+		pub, err := parsePublicKeyHex(a.state.PolicyPub)
+		if err != nil {
+			a.record(audit.KindEnforcerError, "", "policy key unusable: "+err.Error())
+			return nil
+		}
+		if err := resp.Policy.Verify(pub); err != nil {
+			// A policy we cannot authenticate is never applied.
+			a.record(audit.KindEnforcerError, "", "policy snapshot rejected: "+err.Error())
+			return nil
+		}
+		snap = resp.Policy
+	}
+
+	rt := enforcer.Runtime{
+		Policy:      snap,
+		Grants:      resp.Grants,
+		Revocations: revs,
+		UpdatedAt:   resp.ServerTime,
+	}
+	if err := a.enf.Update(rt); err != nil {
+		a.record(audit.KindEnforcerError, "", "enforcer update failed: "+err.Error())
+		return nil
+	}
+
+	newDigest := ""
+	if snap != nil {
+		newDigest = snap.Digest
+	}
+	a.mu.Lock()
+	changed := newDigest != a.policyDigest
+	a.policyDigest = newDigest
+	a.mu.Unlock()
+	if changed {
+		a.record(audit.KindPolicyApplied, "", "policy digest "+newDigest)
+	}
+	return nil
+}
+
+// drainEvents moves enforcer events into the audit queue.
+func (a *Agent) drainEvents() {
+	for {
+		select {
+		case ev, ok := <-a.enf.Events():
+			if !ok {
+				return
+			}
+			a.recordEvent(ev)
+		default:
+			return
+		}
+	}
+}
+
+func (a *Agent) recordEvent(ev enforcer.Event) {
+	subject := fmt.Sprintf("pid:%d uid:%d exe:%s", ev.Subject.PID, ev.Subject.UID, ev.Subject.ExePath)
+	detail := ev.Reason
+	if ev.Rule != "" {
+		detail = "rule=" + ev.Rule + " reason=" + ev.Reason
+	}
+	r, err := a.writer.Append(audit.Record{
+		Time:     ev.Time,
+		Kind:     ev.Kind,
+		Path:     ev.Path,
+		Op:       string(ev.Op),
+		Subject:  subject,
+		TokenID:  ev.TokenID,
+		Detail:   detail,
+		Decision: decisionWord(ev.Kind),
+	})
+	if err != nil {
+		a.log.Error("audit append failed", "err", err)
+		return
+	}
+	a.enqueue(r)
+}
+
+func decisionWord(kind string) string {
+	switch kind {
+	case audit.KindWriteBlocked:
+		return "deny"
+	case audit.KindWriteObserved:
+		return "observe"
+	default:
+		return "allow"
+	}
+}
+
+func (a *Agent) record(kind, path, detail string) {
+	r, err := a.writer.Append(audit.Record{Kind: kind, Path: path, Detail: detail})
+	if err != nil {
+		a.log.Error("audit append failed", "err", err)
+		return
+	}
+	a.enqueue(r)
+}
+
+const maxPending = 5000
+
+func (a *Agent) enqueue(r audit.Record) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.pending) >= maxPending {
+		// Dropping the oldest is better than unbounded memory growth, but the
+		// sequence gap it creates will be detected by the server, which is the
+		// intended behaviour: a silent drop is not acceptable.
+		a.pending = a.pending[1:]
+	}
+	a.pending = append(a.pending, r)
+}
+
+func (a *Agent) flush(ctx context.Context) error {
+	a.mu.Lock()
+	if len(a.pending) == 0 {
+		a.mu.Unlock()
+		return nil
+	}
+	n := len(a.pending)
+	if n > 200 {
+		n = 200
+	}
+	batch := make([]audit.Record, n)
+	copy(batch, a.pending[:n])
+	a.mu.Unlock()
+
+	if _, err := a.client.UploadAudit(ctx, batch); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == 409 {
+			a.log.Error("control plane rejected audit chain", "detail", apiErr.Body)
+			a.mu.Lock()
+			a.unhealthy = true
+			a.mu.Unlock()
+		}
+		return err
+	}
+	a.mu.Lock()
+	a.pending = a.pending[n:]
+	a.mu.Unlock()
+
+	if f := a.file; f != nil {
+		_ = f.Sync()
+	}
+	return nil
+}
+
+func (a *Agent) shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = a.flush(ctx)
+	_ = a.enf.Close()
+	if a.file != nil {
+		_ = a.file.Sync()
+		_ = a.file.Close()
+	}
+	a.log.Info("agent stopped")
+}
