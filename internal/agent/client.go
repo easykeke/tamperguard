@@ -551,7 +551,7 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*config.AgentState, error)
 }
 
 // Version is the agent build version reported at enrolment.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // serverName extracts a TLS server name from a URL for diagnostics.
 func serverName(raw string) string {

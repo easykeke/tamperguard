@@ -1,6 +1,10 @@
 # 变更记录
 
-## 未发布（0.2.0 开发中）
+## 0.2.0（2026-11-25）
+
+相对 0.1.0 的主要变化：Windows 被防护端（ACL 严格模式 + MIC）、Landlock 进程自保护、fs-verity 发布固化、路径模型跨平台、Windows 交叉编译 CI 任务。
+- **不可变发布模式（P5.6）**：新增 `docs/immutable.md` 与 `deploy/k8s/immutable/deployment.yaml`（只读根文件系统、站点来自镜像层、发布即新镜像、回滚即旧镜像），并说明它在混合环境里与文件级防护的分工。
+
 
 - **fs-verity 发布固化（P5.3）**：`tg-publish run --verity`（本地发布）与 `tg-agent run --verity`（pull 交付）在写入完成后对每个文件启用 fs-verity——文件变为内核级只读、读取按 Merkle 树校验；`tg-agent verity enable|digest|check` 提供运维入口；`tg-agent probe` 报告可用性。运行环境需内核 `CONFIG_FS_VERITY` + 文件系统 `verity` 特性（开发用 WSL2 内核未启用，运行时验证待补，代码路径已用 ioctl 错误码验证）。
 - **Windows 严格模式（P5.2 修正）**：默认不再给 Administrators 写权限，受保护路径标 **System + `NO_WRITE_UP`**——提权管理员的普通写入也被内核拒绝，只有发布窗口内临时降为 Medium 的路径允许授权发布账号写入；管理员只能通过取得所有权/重写 ACL/改 SACL/停 Agent 绕过（心跳重新施加约 15 s），这与 Linux root 的对抗能力对等；`--windows-allow-admins` 可恢复兼容模式，`--integrity=false` 关闭 MIC。

@@ -1,0 +1,42 @@
+# Immutable deployment example: the site ships inside the image and the
+# container filesystem is read-only, so a compromised process cannot modify any
+# served file. Publishing means building a new image; rollback means rolling back.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-immutable
+  labels:
+    app: web-immutable
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web-immutable
+  template:
+    metadata:
+      labels:
+        app: web-immutable
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: registry.example.com/site:2026-11-25 # built by CI, site COPYed in
+          ports:
+            - containerPort: 8080
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
