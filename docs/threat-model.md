@@ -12,7 +12,7 @@
 | 控制面单实例 | `tg-server` 集中部署，SQLite 存储，管理员通过浏览器访问 |
 | 发布端默认分机 | 生产环境 `tg-publish` 与被保护节点分开；P0 演示可同机 |
 | 保护范围由策略决定 | 只有策略列出的路径受保护，未列出路径不拦截 |
-| 执行层 | P0 是 eBPF LSM（代码已落地，待内核验证）；未加载成功时回退 observe（不阻断，真实写入不自动记录）并标记 degraded。fanotify 降级是 P2，未实现。WSL2 内核已启用 bpf LSM，真实阻断效果待验证 |
+| 执行层 | P0 是 eBPF LSM（已在 Linux 6.6 + bpf LSM 实测拦截）；未加载成功时回退 observe（不阻断，真实写入不自动记录）并标记 degraded。fanotify 降级是 P2，未实现。WSL2 内核已启用 bpf LSM，真实阻断已实测通过 |
 
 ### 1.2 安全声明
 

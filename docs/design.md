@@ -1,6 +1,6 @@
 # TamperGuard 技术设计
 
-> 文档状态：2026-11-25。P0 已落地：三端入口（`cmd/tg-server`、`cmd/tg-agent`、`cmd/tg-publish`）、核心包（`internal/token`、`internal/policy`、`internal/audit`，有单测）、控制面（REST、SQLite、mTLS、策略签名、15 秒心跳、审计链校验）、eBPF LSM 执行器代码（`bpf/tg_protect.bpf.c` 与 `internal/enforcer/ebpf_linux.go`：13 个 hook、inode 保护集合、grant map、ringbuf）以及用户态全链路 e2e（`test/e2e/e2e-sim.sh`）。执行器尚未在目标内核上验证真实阻断，相关结论标注“待验证”。fanotify 降级与事件恢复属于 P2，未实现；RASP 属于 P4，未实现。
+> 文档状态：2026-11-25。P0 已落地：三端入口（`cmd/tg-server`、`cmd/tg-agent`、`cmd/tg-publish`）、核心包（`internal/token`、`internal/policy`、`internal/audit`，有单测）、控制面（REST、SQLite、mTLS、策略签名、15 秒心跳、审计链校验）、eBPF LSM 执行器代码（`bpf/tg_protect.bpf.c` 与 `internal/enforcer/ebpf_linux.go`：13 个 hook、inode 保护集合、grant map、ringbuf）以及用户态全链路 e2e（`test/e2e/e2e-sim.sh`）。执行器已在 Linux 6.6（WSL2，bpf LSM 启用）上完成真实阻断验证：`TestEBPFLSMEnforcement` 全部通过，`test/e2e/e2e-ebpf.sh` 全链路通过（webshell 写入 EPERM、发布放行、吊销后拒绝、审计验链通过）；仍标注“待补”的是 hook 覆盖缺口。fanotify 降级与事件恢复属于 P2，未实现；RASP 属于 P4，未实现。
 
 ## 1. 设计目标与非目标
 
@@ -270,7 +270,7 @@ P0 实现（本轮）：
 
 - eBPF LSM 执行器代码已落地：13 个 hook（`file_permission`、`file_open`、`inode_permission`、`inode_create/mkdir/unlink/rmdir/rename/link/setattr/setxattr`、`mmap_file`、`file_mprotect`）attach 成功后启用；任一 attach 失败整体回退 observe。
 - 内核侧可识别的写入主体是 uid（exe 路径只能作为附加条件）。发布端以专用 uid 运行，该 uid 由 `tg-agent enroll --publisher-uids` 写入 Agent 状态，默认 `0`。令牌/grant 在用户态校验后展开为内核 map 的 `(uid, dev, inode)` + 到期时间授权，目录授权覆盖目录内新建操作。
-- 真实阻断尚未在目标内核验证；未验证通过前，不对外宣称“已实测拦截”（待验证）。
+- 真实阻断已在 Linux 6.6 + bpf LSM 上实测：受保护写入返回 EPERM、读放行、新建与删除被拒、令牌授权可写、撤权后再次被拒；其他内核版本与文件系统仍需分别验证。
 - fanotify 降级与事件恢复是 P2，当前未实现。
 - 发布端与被保护节点同机是 P0 唯一端到端流程。跨机传输不在代码里，需要部署侧 rsync/SSH/共享存储等外部通道，当前未实现。
 
@@ -281,7 +281,7 @@ P0 实现（本轮）：
 
 ## 5. 内核层设计
 
-本节是 eBPF LSM 执行器的设计。执行器代码已落地（`bpf/tg_protect.bpf.c` + `internal/enforcer/ebpf_linux.go`），尚未在目标内核上完成真实阻断验证；文中“待验证”表示尚未确认，“待补”表示当前实现与设计意图存在差距。
+本节是 eBPF LSM 执行器的设计。执行器代码已落地（`bpf/tg_protect.bpf.c` + `internal/enforcer/ebpf_linux.go`），已在 Linux 6.6 + bpf LSM 上完成真实阻断验证；文中其余“待验证”表示尚未确认，“待补”表示当前实现与设计意图存在差距。
 
 ### 5.1 前提与加载流程
 
@@ -674,7 +674,7 @@ P1 之后的完善项：补全 hook 边界（跨文件系统 rename、link 别�
 
 | 阶段 | 范围 | 当前状态 | 退出条件 |
 |---|---|---|---|
-| P0 骨架 | 三端工程结构、核心库、REST API、SQLite、mTLS enrollment、策略签发与同步、15 秒心跳、审计上报与验链、eBPF LSM 执行器（13 个 hook、inode 保护集合与授权 map、ringbuf）、observe 回退、用户态 e2e、`make build` | 核心库、控制面、两个 Agent、eBPF 执行器代码与 e2e 已落地；内核真实阻断待验证 | 同机 e2e + 内核验证：发布放行、webshell 写入被拒（需 bpf LSM 与 publisher uid 配置）、吊销后拒绝、审计验链 |
+| P0 骨架 | 三端工程结构、核心库、REST API、SQLite、mTLS enrollment、策略签发与同步、15 秒心跳、审计上报与验链、eBPF LSM 执行器（13 个 hook、inode 保护集合与授权 map、ringbuf）、observe 回退、用户态 e2e、`make build` | 核心库、控制面、两个 Agent、eBPF 执行器代码与 e2e 已落地；内核真实阻断已在 Linux 6.6 + bpf LSM 验证 | 同机 e2e + 内核验证：发布放行、webshell 写入被拒（需 bpf LSM 与 publisher uid 配置）、吊销后拒绝、审计验链 |
 | P1 内核主阻断完善 | 补 5.2 节列出的原语缺口（mmap 父目录、link 源 inode、单文件规则 unlink/rename）、observe 接线、索引刷新、5.10 兼容、压测与基准、SSE 推送 | 未实现 | 5.10 与 6.6 至少各验证一次；给出真实性能数据 |
 | P2 降级恢复 | fanotify 权限事件、队列溢出与监听进程重启恢复、审批流、降级节点标红与合规统计、SSE 撤销 | 未实现 | 无 BPF LSM 的内核上能稳定阻断 open 写，审批与审计可用 |
 | P3 容器与规模化 | overlayfs copy-up 的路径+inode 双重匹配验证、容器场景、多节点规模、审计保留与导出 | 未实现，待验证 | 容器场景有明确的支持/不支持清单，不靠推断 |
