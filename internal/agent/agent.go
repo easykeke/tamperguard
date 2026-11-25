@@ -35,6 +35,8 @@ type Agent struct {
 	pending      []audit.Record
 	policyDigest string
 	unhealthy    bool
+	reported     []string // grant token IDs last reported to the control plane
+	wake         chan struct{}
 }
 
 // New builds an agent from persisted state.
@@ -59,7 +61,8 @@ func New(state *config.AgentState, enf enforcer.Enforcer, logger *slog.Logger) (
 		f.Close()
 		return nil, err
 	}
-	return &Agent{state: state, client: client, enf: enf, log: logger, writer: writer, file: f}, nil
+	return &Agent{state: state, client: client, enf: enf, log: logger, writer: writer, file: f,
+		wake: make(chan struct{}, 1)}, nil
 }
 
 func parsePrivateKey(keyPEM string) (ed25519.PrivateKey, error) {
@@ -98,6 +101,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.log.Info("agent starting", "agent", a.state.AgentID, "role", a.state.Role,
 		"enforcer", a.enf.Name(), "degraded", a.enf.Capability().Degraded)
 
+	// Push channel: a policy update, revocation or grant wakes the loop
+	// immediately instead of waiting for the next heartbeat. It is an
+	// optimisation only -- the heartbeat remains the source of truth.
+	go a.streamLoop(ctx)
+
 	// First sync immediately so a restart applies the current policy fast.
 	a.tick(ctx)
 
@@ -110,6 +118,36 @@ func (a *Agent) Run(ctx context.Context) error {
 			return nil
 		case <-t.C:
 			a.tick(ctx)
+		case <-a.wake:
+			a.tick(ctx)
+		}
+	}
+}
+
+// streamLoop keeps the push connection alive with exponential backoff.
+func (a *Agent) streamLoop(ctx context.Context) {
+	backoff := 2 * time.Second
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		err := a.client.Stream(ctx, func(kind string, data []byte) {
+			select {
+			case a.wake <- struct{}{}:
+			default:
+			}
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		a.log.Warn("push stream disconnected", "err", err, "retry_in", backoff)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
 		}
 	}
 }
@@ -189,7 +227,37 @@ func (a *Agent) sync(ctx context.Context) error {
 	if changed {
 		a.record(audit.KindPolicyApplied, "", "policy digest "+newDigest)
 	}
+
+	// Tell the control plane which tokens are actually installed, so a
+	// publisher can wait for this acknowledgement instead of guessing.
+	active := make([]string, 0, len(resp.Grants))
+	for _, g := range resp.Grants {
+		if g.TokenID != "" {
+			active = append(active, g.TokenID)
+		}
+	}
+	a.mu.Lock()
+	prev := a.reported
+	a.reported = active
+	a.mu.Unlock()
+	if !sameStrings(prev, active) {
+		if err := a.client.ReportGrants(ctx, active); err != nil {
+			a.log.Warn("grant report failed", "err", err)
+		}
+	}
 	return nil
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // drainEvents moves enforcer events into the audit queue.

@@ -57,6 +57,7 @@ type Server struct {
 
 	mux *http.ServeMux
 	ui  fs.FS
+	hub *Hub
 }
 
 // New loads keys and builds the server. It fails closed: if any key material
@@ -68,7 +69,7 @@ func New(cfg *config.Server, st *store.Store, opts Options) (*Server, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	s := &Server{cfg: cfg, st: st, log: opts.Logger, now: opts.Now, ui: opts.UI}
+	s := &Server{cfg: cfg, st: st, log: opts.Logger, now: opts.Now, ui: opts.UI, hub: NewHub()}
 
 	var err error
 	if s.sessionKey, err = cfg.SessionKeyBytes(); err != nil {
@@ -145,6 +146,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/v1/agent/enroll", s.handleEnroll)
 	m.Handle("POST /api/v1/agent/heartbeat", s.agent("protect", s.handleHeartbeat))
 	m.Handle("POST /api/v1/agent/audit", s.agent("protect", s.handleAuditUpload))
+	m.Handle("POST /api/v1/agent/grants", s.agent("protect", s.handleGrantReport))
+	m.Handle("GET /api/v1/agent/stream", s.agent("protect", s.handleStream))
 
 	m.Handle("GET /api/v1/overview", s.admin(s.handleOverview))
 
@@ -175,6 +178,7 @@ func (s *Server) routes() {
 	m.Handle("GET /api/v1/publish/pending", s.agent("publish", s.handlePublishPending))
 	m.Handle("POST /api/v1/publish/{id}/manifest", s.agent("publish", s.handlePublishManifest))
 	m.Handle("POST /api/v1/publish/{id}/complete", s.agent("publish", s.handlePublishComplete))
+	m.Handle("GET /api/v1/publish/{id}/ready", s.agent("publish", s.handlePublishReady))
 
 	m.HandleFunc("GET /", s.handleUI)
 }

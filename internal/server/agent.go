@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"time"
@@ -313,6 +314,109 @@ func (s *Server) activeGrants(nodeID string) ([]policy.Grant, error) {
 	return out, nil
 }
 
+// ---------- push channel ----------
+
+// handleStream keeps an SSE connection open and pushes change notifications
+// (policy updated, revocation issued, grant issued). The events are hints: the
+// agent reacts by syncing, which keeps correctness independent of delivery.
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	agentID, _ := clientCN(r)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "internal", "streaming not supported")
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Connection", "keep-alive")
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ch, cancel := s.hub.Subscribe(agentID)
+	defer cancel()
+	s.log.Info("agent stream opened", "agent", agentID, "connected", s.hub.Connected())
+	defer func() {
+		s.log.Info("agent stream closed", "agent", agentID)
+	}()
+
+	fmt.Fprintf(w, "event: hello\ndata: {\"node_id\":%q}\n\n", agentID)
+	flusher.Flush()
+
+	ping := time.NewTicker(20 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			payload, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Kind, payload)
+			flusher.Flush()
+		case <-ping.C:
+			// Comment frame keeps proxies and the kernel from idling the
+			// connection out without waking the agent.
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// handleGrantReport records which release tokens the agent has actually
+// installed in its enforcement map. A publisher polls this to know when the
+// node is ready, instead of guessing with a fixed delay.
+func (s *Server) handleGrantReport(w http.ResponseWriter, r *http.Request) {
+	agentID, _ := clientCN(r)
+	var in struct {
+		ActiveTokens []string `json:"active_tokens"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := s.st.SetNodeActiveGrants(agentID, in.ActiveTokens); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(in.ActiveTokens)})
+}
+
+// handlePublishReady tells a publisher whether its token is live on the target
+// node yet.
+func (s *Server) handlePublishReady(w http.ResponseWriter, r *http.Request) {
+	cn, _ := clientCN(r)
+	reqRow, err := s.st.GetPublishRequest(r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "publish request not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if reqRow.PublisherID != cn {
+		writeErr(w, http.StatusForbidden, "forbidden", "request belongs to another publisher")
+		return
+	}
+	ready := false
+	if reqRow.TokenID != "" {
+		ready, err = s.st.NodeHasActiveGrant(reqRow.NodeID, reqRow.TokenID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ready":    ready,
+		"token_id": reqRow.TokenID,
+		"node_id":  reqRow.NodeID,
+		"status":   reqRow.Status,
+	})
+}
+
 // ---------- audit upload ----------
 
 type auditUploadRequest struct {
@@ -474,6 +578,9 @@ func (s *Server) handlePublishManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("release token issued", "token", claims.TokenID, "publisher", cn, "node", reqRow.NodeID)
+	// Wake the target node so the grant is installed immediately instead of on
+	// its next heartbeat. This is what makes publishing feel instant.
+	s.hub.Publish(reqRow.NodeID, Event{Kind: EventGrant, NodeID: reqRow.NodeID})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":      raw,

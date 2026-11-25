@@ -131,4 +131,28 @@ func TestEBPFLSMEnforcement(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("observe rule records without blocking", func(t *testing.T) {
+		observeOnly := &policy.Snapshot{Policy: policy.Policy{
+			ID: "pol-observe", Name: "observe", Version: 1,
+			Paths: []policy.PathRule{{Path: dir, Recursive: true, Mode: policy.ModeObserve}},
+		}}
+		if err := enf.Update(Runtime{Policy: observeOnly}); err != nil {
+			t.Fatalf("update observe: %v", err)
+		}
+		if err := os.WriteFile(protected, []byte("observed-write"), 0o644); err != nil {
+			t.Fatalf("observe mode must not block the write: %v", err)
+		}
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case ev := <-enf.Events():
+				if ev.Kind == "write.observed" {
+					return
+				}
+			case <-deadline:
+				t.Fatal("no write.observed event")
+			}
+		}
+	})
 }

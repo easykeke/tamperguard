@@ -117,7 +117,12 @@ Publisher-agent endpoints (mTLS, role=publish):
 |---|---|---|---|
 | GET | `/publish/pending` | — | Requests assigned to the calling publisher |
 | POST | `/publish/{id}/manifest` | `{"manifest":"sha256:...","files":[{"path","sha256","size"}]}` | → `{"token","expires_at","token_id","paths"}` |
+| GET | `/publish/{id}/ready` | — | → `{"ready":bool,"token_id","node_id","status"}`: whether the target node has installed the grant |
 | POST | `/publish/{id}/complete` | `{"ok":true,"error":""}` | Closes the request |
+
+The publisher polls `/ready` until the node acknowledges the grant, then writes.
+The polling is an optimisation: if it times out the publisher still attempts the
+write and retries on `EPERM` while the token is valid.
 
 ### Tokens and revocations
 | Method | Path | Body | Notes |
@@ -139,12 +144,14 @@ Publisher-agent endpoints (mTLS, role=publish):
 |---|---|---|---|
 | POST | `/agent/heartbeat` | `{"status","enforcer","policy_digest","caps","degraded","audit_seq","enforcer_healthy"}` | Returns `{"policy":Snapshot,"grants":[...],"revocations":[...],"server_time","heartbeat_interval"}` |
 | POST | `/agent/audit` | `{"records":[...]}` | Batch upload; server verifies chain, returns `{"ack_seq","alerts":[...]}` |
+| POST | `/agent/grants` | `{"active_tokens":["tok_..."]}` | Agent reports which grants it actually installed; used by the publisher readiness check |
+| GET | `/agent/stream` | — | `text/event-stream`. Events: `hello`, `policy`, `revoke`, `grant`. A dropped event only costs latency; the heartbeat reconciles. |
 
-Agents heartbeat every 15 s by default. Revocation is delivered in the
-heartbeat response, so the worst-case revocation latency is one heartbeat
-period (15 s), comfortably inside the 30 s documented bound. A push channel
-(SSE, `GET /agent/stream`) is a design item for P1 and is NOT implemented in
-this build; do not document it as available.
+Agents heartbeat every 15 s and **also** hold a push stream. Policy changes,
+revocations and new grants are pushed over the stream, so the worst-case
+latency is the stream round trip (sub-second in practice); the heartbeat is the
+fallback when the stream is down, which keeps the documented 30 s bound. The
+stream sends a `: ping` comment every 20 s.
 
 ## Error codes
 

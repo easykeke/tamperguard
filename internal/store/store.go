@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -43,7 +44,11 @@ type Node struct {
 	LastSeen         int64           `json:"last_seen"`
 	EnrolledAt       int64           `json:"enrolled_at"`
 	Revoked          bool            `json:"revoked"`
-	PubKey           string          `json:"-"`
+	// ActiveGrants lists the token IDs the agent reported as installed in its
+	// enforcement map on the last heartbeat. It is how a publisher can tell
+	// that the node is ready for its write, instead of guessing.
+	ActiveGrants []string `json:"active_grants"`
+	PubKey       string   `json:"-"`
 }
 
 // PublishRequest tracks one release, from request to completion.
@@ -245,6 +250,17 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("store: migrate: %w", err)
 		}
 	}
+	// Additive migrations for databases created by an older build. SQLite has
+	// no "ADD COLUMN IF NOT EXISTS", so a duplicate-column error is expected
+	// and ignored.
+	additive := []string{
+		`ALTER TABLE nodes ADD COLUMN active_grants TEXT NOT NULL DEFAULT '[]'`,
+	}
+	for _, q := range additive {
+		if _, err := s.db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("store: migrate (additive): %w", err)
+		}
+	}
 	return nil
 }
 
@@ -267,15 +283,15 @@ func (s *Store) UpsertNode(n Node) error {
 }
 
 const nodeCols = `id, hostname, role, status, enforcer, policy_id, policy_version, policy_digest,
-	degraded, degraded_approved, caps, agent_version, last_seen, enrolled_at, revoked, pubkey`
+	degraded, degraded_approved, caps, agent_version, last_seen, enrolled_at, revoked, active_grants, pubkey`
 
 func scanNode(sc interface{ Scan(...any) error }) (Node, error) {
 	var n Node
-	var caps string
+	var caps, activeGrants string
 	var degraded, approved, revoked int
 	err := sc.Scan(&n.ID, &n.Hostname, &n.Role, &n.Status, &n.Enforcer, &n.PolicyID,
 		&n.PolicyVersion, &n.PolicyDigest, &degraded, &approved, &caps,
-		&n.AgentVersion, &n.LastSeen, &n.EnrolledAt, &revoked, &n.PubKey)
+		&n.AgentVersion, &n.LastSeen, &n.EnrolledAt, &revoked, &activeGrants, &n.PubKey)
 	if err != nil {
 		return Node{}, err
 	}
@@ -286,6 +302,11 @@ func scanNode(sc interface{ Scan(...any) error }) (Node, error) {
 		caps = "{}"
 	}
 	n.Caps = json.RawMessage(caps)
+	if activeGrants != "" {
+		if err := json.Unmarshal([]byte(activeGrants), &n.ActiveGrants); err != nil {
+			n.ActiveGrants = nil
+		}
+	}
 	if n.Role == "" {
 		n.Role = "protect"
 	}
@@ -389,6 +410,34 @@ func (s *Store) ApproveDegraded(nodeID string, approved bool) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetNodeActiveGrants records the token IDs the agent has installed.
+func (s *Store) SetNodeActiveGrants(nodeID string, ids []string) error {
+	if ids == nil {
+		ids = []string{}
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE nodes SET active_grants=? WHERE id=?`, string(b), nodeID)
+	return err
+}
+
+// NodeHasActiveGrant reports whether a node reported the given token as
+// installed.
+func (s *Store) NodeHasActiveGrant(nodeID, tokenID string) (bool, error) {
+	n, err := s.GetNode(nodeID)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range n.ActiveGrants {
+		if id == tokenID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // SetNodeRevoked marks a node identity as revoked (its cert is rejected).

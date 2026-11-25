@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: vet
+        run: go vet ./...
+      - name: unit tests
+        run: go test ./... -count=1
+      - name: build three binaries
+        run: make build
+      - name: userspace e2e
+        run: sudo bash test/e2e/e2e-sim.sh
+
+  bpf-build:
+    # Verifies the eBPF program still compiles and the embedded object is
+    # reproducible. Actual LSM enforcement cannot run on hosted runners
+    # (the kernel command line is not controllable); use test/e2e/e2e-ebpf.sh
+    # on a VM with bpf in the LSM list.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm bpftool libbpf-dev
+      - name: generate vmlinux.h (best effort; hosted kernel may lack BTF)
+        run: sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h || echo "no BTF on this runner"
+      - name: compile eBPF object
+        run: make bpf
+      - name: build with the regenerated object
+        run: make build

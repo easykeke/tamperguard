@@ -346,12 +346,18 @@ int BPF_PROG(tg_inode_mkdir, struct inode *dir, struct dentry *dentry, umode_t m
 SEC("lsm/inode_unlink")
 int BPF_PROG(tg_inode_unlink, struct inode *dir, struct dentry *dentry)
 {
+	int ret = decide(dentry_inode(dentry), dentry_parent(dentry), TG_OP_UNLINK);
+	if (ret)
+		return ret;
 	return decide_dir(dir, TG_OP_UNLINK);
 }
 
 SEC("lsm/inode_rmdir")
 int BPF_PROG(tg_inode_rmdir, struct inode *dir, struct dentry *dentry)
 {
+	int ret = decide(dentry_inode(dentry), dentry_parent(dentry), TG_OP_RMDIR);
+	if (ret)
+		return ret;
 	return decide_dir(dir, TG_OP_RMDIR);
 }
 
@@ -359,7 +365,16 @@ SEC("lsm/inode_rename")
 int BPF_PROG(tg_inode_rename, struct inode *old_dir, struct dentry *old_dentry,
 	     struct inode *new_dir, struct dentry *new_dentry)
 {
-	int ret = decide_dir(old_dir, TG_OP_RENAME);
+	int ret;
+	/* Source inode: protects single-file rules and hard-link aliases. */
+	ret = decide(dentry_inode(old_dentry), dentry_parent(old_dentry), TG_OP_RENAME);
+	if (ret)
+		return ret;
+	/* Target inode: renaming over an existing protected file. */
+	ret = decide(dentry_inode(new_dentry), dentry_parent(new_dentry), TG_OP_RENAME);
+	if (ret)
+		return ret;
+	ret = decide_dir(old_dir, TG_OP_RENAME);
 	if (ret)
 		return ret;
 	return decide_dir(new_dir, TG_OP_RENAME);
@@ -369,6 +384,15 @@ SEC("lsm/inode_link")
 int BPF_PROG(tg_inode_link, struct dentry *old_dentry, struct inode *dir,
 	     struct dentry *new_dentry)
 {
+	int ret;
+	/* Linking a protected file elsewhere creates a bypass alias, so the
+	 * source inode must be checked too. */
+	ret = decide(dentry_inode(old_dentry), NULL, TG_OP_LINK);
+	if (ret)
+		return ret;
+	ret = decide(dentry_inode(new_dentry), NULL, TG_OP_LINK);
+	if (ret)
+		return ret;
 	return decide_dir(dir, TG_OP_LINK);
 }
 
@@ -390,12 +414,12 @@ SEC("lsm/mmap_file")
 int BPF_PROG(tg_mmap_file, struct file *file, unsigned long reqprot,
 	     unsigned long prot, unsigned long flags)
 {
-	struct inode *inode;
+	struct dentry *de;
 
 	if (!(prot & PROT_WRITE))
 		return 0;
-	inode = BPF_CORE_READ(file, f_inode);
-	return decide(inode, NULL, TG_OP_MMAP);
+	de = BPF_CORE_READ(file, f_path.dentry);
+	return decide(BPF_CORE_READ(file, f_inode), dentry_parent(de), TG_OP_MMAP);
 }
 
 SEC("lsm/file_mprotect")
@@ -403,13 +427,15 @@ int BPF_PROG(tg_file_mprotect, struct vm_area_struct *vma, unsigned long reqprot
 	     unsigned long prot)
 {
 	struct file *file;
+	struct dentry *de;
 
 	if (!(prot & PROT_WRITE))
 		return 0;
 	file = BPF_CORE_READ(vma, vm_file);
 	if (!file)
 		return 0;
-	return decide(BPF_CORE_READ(file, f_inode), NULL, TG_OP_MPROTECT);
+	de = BPF_CORE_READ(file, f_path.dentry);
+	return decide(BPF_CORE_READ(file, f_inode), dentry_parent(de), TG_OP_MPROTECT);
 }
 
 /*

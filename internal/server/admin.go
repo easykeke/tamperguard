@@ -176,6 +176,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.log.Info("policy created", "policy", created.ID, "name", created.Name)
+	s.hub.Broadcast(Event{Kind: EventPolicy})
 	writeJSON(w, http.StatusCreated, created)
 }
 
@@ -218,6 +219,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.log.Info("policy updated", "policy", updated.ID, "version", updated.Version)
+	s.hub.Broadcast(Event{Kind: EventPolicy})
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -394,6 +396,8 @@ func (s *Server) handleCreateRevocation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.log.Warn("revocation issued", "kind", in.Kind, "value", in.Value, "remote", r.RemoteAddr)
+	// Push immediately; the polling heartbeat is the fallback.
+	s.hub.Broadcast(Event{Kind: EventRevoke})
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "revoked"})
 }
 

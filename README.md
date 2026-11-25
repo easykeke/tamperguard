@@ -62,9 +62,9 @@ sudo ./bin/tg-agent run --state-dir /var/lib/tamperguard-agent
 
 | 状态 | 内容 |
 |---|---|
-| 已验证 | 核心库单测（token/policy/audit，覆盖篡改、删除、重放、过期、错误密钥）；控制平面（REST、SQLite、mTLS 注册、策略签名下发、心跳、审计验链）；保护端与发布端全链路；**eBPF LSM 真实阻断**：13 个 hook，`TestEBPFLSMEnforcement` 全部通过（受保护写入 EPERM、读放行、新建/删除被拒、令牌授权可写、撤权后再次被拒、阻断事件上报用户态）；内核级端到端 `test/e2e/e2e-ebpf.sh` 全部通过（WebShell 写入被内核拒绝 → 发布端凭令牌写入成功 → 吊销后写入被拒 → 审计链校验通过）。 |
-| 待完成 | 设计文档列出的原语缺口（mmap 父目录、link 源 inode、单文件规则 unlink/rename、process 规则未接线、observe 接线、新建子目录索引刷新）；SSE 撤销推送（当前撤销走心跳响应，≤ 一个心跳周期）；发布端等待节点安装 grant 依赖重试（P1 改为推送/确认）；审计里新建文件的路径可能只回填 `inode:<号>`。 |
-| 未实现 | fanotify 降级与事件恢复（P2）；跨机发布内容传输；容器/OverlayFS 的 copy-up 映射（P3）；RASP（P4）。 |
+| 已验证 | 核心库单测（token/policy/audit，覆盖篡改、删除、重放、过期、错误密钥）；控制平面（REST、SQLite、mTLS 注册、策略签名下发、心跳、审计验链）；保护端与发布端全链路；**eBPF LSM 真实阻断**：13 个 hook，`TestEBPFLSMEnforcement` 全部通过（受保护写入 EPERM、读放行、新建/删除被拒、令牌授权可写、撤权后再次被拒、阻断事件上报用户态、observe 规则只记录不阻断）；内核级端到端 `test/e2e/e2e-ebpf.sh` 全部通过（WebShell 写入被内核拒绝 → 发布端凭令牌写入成功 → 吊销后 2 秒内写入被拒 → 审计链校验通过）；**SSE 推送通道**（策略/吊销/授权变更即时下发，心跳作兜底）；**授权传播确认**（发布端等节点确认 grant 已安装再写，失败回退重试）；mmap/mprotect 父目录判定、link 源与目标 inode、单文件规则的 unlink/rename 已补齐；GitHub Actions CI（单测 + 构建 + eBPF 编译）。 |
+| 待完成 | `policy.writers` 里 `kind=process` 的规则尚未映射到内核 uid（当前用 agent 的 `--publisher-uids` 配置）；发布端新建子目录后的保护索引需要一次心跳刷新；审计里新建文件的路径可能只回填 `inode:<号>`；eBPF 的 inode 匹配在 OverlayFS 上需要 P3 的 copy-up 映射。 |
+| 未实现 | fanotify 降级与事件恢复（P2）；跨机发布内容传输；容器/OverlayFS（P3）；RASP（P4）。 |
 
 已验证的边界：eBPF 的 inode 匹配在普通本地文件系统（ext4/xfs/tmpfs）上有效；OverlayFS 容器场景需要 P3 的 copy-up 映射，当前未验证。节点实际执行层以心跳上报的 `enforcer` 字段为准：`ebpf-lsm` 才是内核阻断，`observe` 表示没有阻断，也不会自动记录真实写入。
 

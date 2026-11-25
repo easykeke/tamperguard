@@ -404,21 +404,21 @@ curl -sS --cacert "$CA" -b /tmp/tg.cookies \
   "$BASE/api/v1/revocations" | jq .
 ```
 
-撤销通过心跳响应下发（默认 15 秒；本演示 `--poll 5`）。等待一个心跳周期后，新建一次发布申请并观察结果：
+撤销通过 SSE 推送即时下发（Agent 心跳周期默认 15 秒，仅作为推送断线时的兜底）。等 2 秒后，新建一次发布申请并观察结果：
 
 ```bash
-sleep 10
+sleep 2
 REQ2=$(curl -sS --cacert "$CA" -b /tmp/tg.cookies \
   -H 'Content-Type: application/json' \
   -d "{\"node_id\":\"$PROT_ID\",\"publisher_id\":\"$PUB_ID\",\"source_dir\":\"/tmp/tg-release\",\"target_dir\":\"/var/www/site\",\"note\":\"after revoke\"}" \
   "$BASE/api/v1/publish-requests" | jq -r '.id')
 
-sleep 10
+sleep 5
 curl -sS --cacert "$CA" -b /tmp/tg.cookies "$BASE/api/v1/publish-requests/$REQ2" \
   | jq '{status,error}'
 ```
 
-期望：发布失败或被列为失败状态，节点侧出现拒绝记录。observe 模式下不会产生拒绝，只能看到吊销列表已下发（`GET /api/v1/revocations`），不能把“撤销成功”写成“写入被阻断”。eBPF 节点上的撤销已在 `test/e2e/e2e-ebpf.sh` 中实测：撤销后同一 uid 的写入被内核拒绝；以发布请求状态、Agent 日志与审计记录为准。
+期望：发布失败或被列为失败状态，节点侧出现拒绝记录。observe 模式下不会产生拒绝，只能看到吊销列表已下发（`GET /api/v1/revocations`），不能把“撤销成功”写成“写入被阻断”。eBPF 节点上的撤销已在 `test/e2e/e2e-ebpf.sh` 中实测：撤销后 2 秒内同一 uid 的写入被内核拒绝；以发布请求状态、Agent 日志与审计记录为准。
 
 吊销只影响后续授权，不回滚已完成的发布。撤销发布主体后，要恢复发布需要用新的发布端身份或管理员处理撤销记录（当前没有“取消撤销”接口）。
 

@@ -94,6 +94,11 @@ if grep -q "eBPF LSM enforcement active" "$DATA/agent.log"; then
 else
   bad "eBPF LSM did not attach"; tail -5 "$DATA/agent.log"; exit 1
 fi
+if grep -q "agent stream opened" "$DATA/server.log"; then
+  ok "push stream (SSE) connected"
+else
+  bad "agent did not open the push stream"; tail -5 "$DATA/server.log"
+fi
 sleep 2
 
 say "webshell write as uid $NOBODY (must be EPERM)"
@@ -125,14 +130,19 @@ else
 fi
 
 say "revoke publisher, then write as root (must be EPERM again)"
+REVOKE_AT=$(date +%s)
 curl -sk -b "$DATA/cookies" -X POST "$BASE/api/v1/revocations" -H 'Content-Type: application/json' \
   -d "{\"kind\":\"subject\",\"value\":\"$PUB_ID\",\"reason\":\"e2e\"}" >/dev/null
-sleep 5
+# The revocation is pushed over SSE; 2s is a generous bound for the sync.
+sleep 2
 ( echo evil > "$SITE/after-revoke.php" ) 2>"$DATA/rev.err"
 RV_RC=$?
-if [ $RV_RC -ne 0 ]; then ok "write denied after revocation (rc=$RV_RC)"; else bad "write allowed after revocation"; fi
+REVOKE_LATENCY=$(( $(date +%s) - REVOKE_AT ))
+if [ $RV_RC -ne 0 ]; then ok "write denied ${REVOKE_LATENCY}s after revocation (rc=$RV_RC)"; else bad "write allowed after revocation"; fi
 
 say "audit chain"
+# Blocked events are uploaded on the agent's next tick; give it a moment.
+sleep 3
 curl -sk -b "$DATA/cookies" "$BASE/api/v1/audit?node_id=$PROT_ID&limit=100" > "$DATA/audit.json"
 ACOUNT=$(jq 'length' "$DATA/audit.json")
 BLOCKED=$(jq '[.[] | select(.kind=="write.blocked")] | length' "$DATA/audit.json")

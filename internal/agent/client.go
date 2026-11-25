@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -157,6 +158,62 @@ func (c *Client) UploadAudit(ctx context.Context, records []audit.Record) (uint6
 	return out.AckSeq, nil
 }
 
+// ReportGrants tells the control plane which release tokens are installed.
+func (c *Client) ReportGrants(ctx context.Context, tokens []string) error {
+	if tokens == nil {
+		tokens = []string{}
+	}
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/grants",
+		map[string]any{"active_tokens": tokens}, nil)
+}
+
+// Stream consumes the server-sent event channel until ctx is cancelled or the
+// connection drops. handler is called for each event and must not block.
+func (c *Client) Stream(ctx context.Context, handler func(kind string, data []byte)) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/v1/agent/stream", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	// A stream must not inherit the request timeout of the regular client.
+	streamClient := &http.Client{Transport: c.hc.Transport}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return &APIError{Status: resp.StatusCode, Body: string(raw)}
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	var event string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue // comment / keep-alive
+		}
+		field, value, ok := strings.Cut(line, ": ")
+		if !ok {
+			continue
+		}
+		switch field {
+		case "event":
+			event = value
+		case "data":
+			handler(event, []byte(value))
+		}
+	}
+}
+
 // ---------- publisher endpoints ----------
 
 // PendingRequests lists release requests assigned to this publisher.
@@ -197,6 +254,18 @@ func (c *Client) SubmitManifest(ctx context.Context, id, manifest string, files 
 func (c *Client) CompleteRequest(ctx context.Context, id string, ok bool, errMsg string) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/publish/"+id+"/complete",
 		map[string]any{"ok": ok, "error": errMsg}, nil)
+}
+
+// PublishReady reports whether the target node has installed the grant for
+// this request's token.
+func (c *Client) PublishReady(ctx context.Context, id string) (bool, error) {
+	var out struct {
+		Ready bool `json:"ready"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/publish/"+id+"/ready", nil, &out); err != nil {
+		return false, err
+	}
+	return out.Ready, nil
 }
 
 // ---------- enrolment ----------

@@ -44,19 +44,24 @@ const (
 	verdictAllow     = 0
 	verdictDeny      = 1
 	verdictWouldDeny = 2
-	opFileWrite      = 1
-	opFileOpen       = 2
-	opInodePerm      = 3
-	opCreate         = 4
-	opMkdir          = 5
-	opUnlink         = 6
-	opRmdir          = 7
-	opRename         = 8
-	opLink           = 9
-	opSetattr        = 10
-	opSetxattr       = 11
-	opMmap           = 12
-	opMprotect       = 13
+
+	// Map value semantics for protected_dirs / protected_files.
+	modeEnforce uint8 = 1
+	modeObserve uint8 = 2
+
+	opFileWrite = 1
+	opFileOpen  = 2
+	opInodePerm = 3
+	opCreate    = 4
+	opMkdir     = 5
+	opUnlink    = 6
+	opRmdir     = 7
+	opRename    = 8
+	opLink      = 9
+	opSetattr   = 10
+	opSetxattr  = 11
+	opMmap      = 12
+	opMprotect  = 13
 )
 
 var opNames = map[uint32]policy.Op{
@@ -90,8 +95,9 @@ type EBPF struct {
 	publisherUIDs []int
 
 	mu        sync.Mutex
-	dirs      map[tgInodeKey]string
-	files     map[tgInodeKey]string
+	dirs      map[tgInodeKey]uint8
+	files     map[tgInodeKey]uint8
+	paths     map[tgInodeKey]string
 	grantKeys map[tgGrantKey]uint64
 	healthErr error
 
@@ -116,8 +122,9 @@ func NewEBPF(publisherUIDs []int) (*EBPF, error) {
 		events:        NewBuffer(1024),
 		log:           slog.Default(),
 		publisherUIDs: publisherUIDs,
-		dirs:          map[tgInodeKey]string{},
-		files:         map[tgInodeKey]string{},
+		dirs:          map[tgInodeKey]uint8{},
+		files:         map[tgInodeKey]uint8{},
+		paths:         map[tgInodeKey]string{},
 		grantKeys:     map[tgGrantKey]uint64{},
 		closed:        make(chan struct{}),
 	}
@@ -177,30 +184,39 @@ func (e *EBPF) Capability() Capability {
 //
 // Protection changes are applied as a diff: new entries are added before stale
 // entries are removed, so the map is never empty in between (fail-closed during
-// the update).
+// the update). Rules carry their mode into the map value, so observe rules
+// produce audit events without blocking.
 func (e *EBPF) Update(rt Runtime) error {
-	newDirs := map[tgInodeKey]string{}
-	newFiles := map[tgInodeKey]string{}
+	desiredDirs := map[tgInodeKey]uint8{}
+	desiredFiles := map[tgInodeKey]uint8{}
+	desiredPaths := map[tgInodeKey]string{}
 	var errs []string
+
+	// merge applies one rule's inode set. enforce wins over observe when two
+	// rules cover the same inode, so tightening never depends on rule order.
+	merge := func(dst map[tgInodeKey]uint8, src map[tgInodeKey]string, mode uint8) {
+		for k, p := range src {
+			if cur, ok := dst[k]; ok && cur == modeEnforce {
+				continue
+			}
+			dst[k] = mode
+			desiredPaths[k] = p
+		}
+	}
 
 	if rt.Policy != nil {
 		for _, rule := range rt.Policy.Policy.Paths {
-			if rule.Mode != policy.ModeEnforce {
-				// Observe-mode rules are recorded by policy.Decide in the
-				// simulation backend; the kernel path currently only enforces.
-				continue
+			mode := modeEnforce
+			if rule.Mode == policy.ModeObserve {
+				mode = modeObserve
 			}
 			dirs, files, err := collectInodes(rule.Path, rule.Recursive)
 			if err != nil {
 				errs = append(errs, err.Error())
 				continue
 			}
-			for k, v := range dirs {
-				newDirs[k] = v
-			}
-			for k, v := range files {
-				newFiles[k] = v
-			}
+			merge(desiredDirs, dirs, mode)
+			merge(desiredFiles, files, mode)
 		}
 	}
 
@@ -241,33 +257,27 @@ func (e *EBPF) Update(rt Runtime) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Additions first (fail-closed window), then removals.
-	for k := range newDirs {
-		if _, ok := e.dirs[k]; !ok {
-			if err := e.objs.ProtectedDirs.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
-				errs = append(errs, "dir "+k.String()+": "+err.Error())
+	// Additions/updates first (fail-closed window), then removals.
+	apply := func(name string, m *ebpf.Map, have, want map[tgInodeKey]uint8) {
+		for k, v := range want {
+			if cur, ok := have[k]; ok && cur == v {
+				continue
+			}
+			if err := m.Update(k, v, ebpf.UpdateAny); err != nil {
+				errs = append(errs, name+" "+k.String()+": "+err.Error())
+			}
+		}
+		for k := range have {
+			if _, ok := want[k]; !ok {
+				_ = m.Delete(k)
 			}
 		}
 	}
-	for k := range newFiles {
-		if _, ok := e.files[k]; !ok {
-			if err := e.objs.ProtectedFiles.Update(k, uint8(1), ebpf.UpdateAny); err != nil {
-				errs = append(errs, "file "+k.String()+": "+err.Error())
-			}
-		}
-	}
-	for k := range e.dirs {
-		if _, ok := newDirs[k]; !ok {
-			_ = e.objs.ProtectedDirs.Delete(k)
-		}
-	}
-	for k := range e.files {
-		if _, ok := newFiles[k]; !ok {
-			_ = e.objs.ProtectedFiles.Delete(k)
-		}
-	}
-	e.dirs = newDirs
-	e.files = newFiles
+	apply("dir", e.objs.ProtectedDirs, e.dirs, desiredDirs)
+	apply("file", e.objs.ProtectedFiles, e.files, desiredFiles)
+	e.dirs = desiredDirs
+	e.files = desiredFiles
+	e.paths = desiredPaths
 
 	for k, expiry := range newGrants {
 		if err := e.objs.Grants.Update(k, expiry, ebpf.UpdateAny); err != nil {
@@ -426,10 +436,7 @@ func (e *EBPF) handle(ev ebpfEvent) {
 		op = "write"
 	}
 	e.mu.Lock()
-	path := e.files[tgInodeKey{Ino: ev.Ino, Dev: ev.Dev}]
-	if path == "" {
-		path = e.dirs[tgInodeKey{Ino: ev.Ino, Dev: ev.Dev}]
-	}
+	path := e.paths[tgInodeKey{Ino: ev.Ino, Dev: ev.Dev}]
 	e.mu.Unlock()
 	comm := string(bytes.TrimRight(ev.Comm[:], "\x00"))
 	reason := "kernel-lsm"

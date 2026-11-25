@@ -221,6 +221,14 @@ func (p *Publisher) handle(ctx context.Context, req store.PublishRequest) error 
 		return err
 	}
 
+	// The token is signed, but the target node only learns the matching grant
+	// when it syncs. Ask the control plane whether the node has confirmed the
+	// grant before writing; the retry loop still tolerates a late arrival.
+	if err := p.waitGrantReady(ctx, req.ID, 10*time.Second); err != nil {
+		p.log.Warn("grant not confirmed by the node in time; attempting the write anyway",
+			"request", req.ID, "err", err)
+	}
+
 	written, err := p.writeWithGrantSettle(req, man, claims)
 	if err != nil {
 		return err
@@ -256,6 +264,29 @@ func (p *Publisher) writeWithGrantSettle(req store.PublishRequest, man *Manifest
 		}
 		p.log.Warn("write denied, waiting for the grant to reach the node", "attempt", attempt, "err", err)
 		time.Sleep(2 * time.Second)
+	}
+}
+
+// waitGrantReady polls the control plane until the target node reports the
+// grant as installed.
+func (p *Publisher) waitGrantReady(ctx context.Context, requestID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		ready, err := p.client.PublishReady(ctx, requestID)
+		if err == nil && ready {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return err
+			}
+			return errors.New("publish: grant not confirmed before timeout")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 }
 
