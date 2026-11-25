@@ -15,3 +15,6 @@ bpf/vmlinux.h
 .test-win/results.log
 .test-win/sandbox/
 
+
+.test-win/*.out
+.test-win/*.err

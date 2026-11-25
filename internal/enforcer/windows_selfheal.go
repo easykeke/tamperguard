@@ -13,6 +13,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/audit"
 	"github.com/easykeke/tamperguard/internal/baseline"
 	"github.com/easykeke/tamperguard/internal/policy"
+	"github.com/easykeke/tamperguard/internal/watch"
 )
 
 // Windows self-heal: the ACL/MIC layers stop ordinary writes, but an
@@ -39,6 +40,7 @@ func (w *WindowsACL) setupSelfHeal(stateDir string) error {
 		return err
 	}
 	w.base = base
+	w.scanSignal = make(chan struct{}, 1)
 	w.scanInterval = 30 * time.Second
 	if raw := os.Getenv("TG_WIN_SCAN_SECONDS"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 2 {
@@ -58,7 +60,40 @@ func (w *WindowsACL) healLoop() {
 			return
 		case <-t.C:
 			w.healOnce()
+		case <-w.scanSignal:
+			// Coalesce bursts: a release writes many files, a single scan
+			// reconciles all of them.
+			time.Sleep(300 * time.Millisecond)
+			select {
+			case <-w.scanSignal:
+			default:
+			}
+			w.healOnce()
 		}
+	}
+}
+
+// restartWatchers re-arms ReadDirectoryChangesW on the protected roots so a
+// tamper attempt triggers an immediate scan instead of waiting for the ticker.
+func (w *WindowsACL) restartWatchers(roots []string) {
+	w.watchMu.Lock()
+	defer w.watchMu.Unlock()
+	for _, wv := range w.watchers {
+		_ = wv.Close()
+	}
+	w.watchers = nil
+	for _, root := range roots {
+		wv, err := watch.Watch(root, func() {
+			select {
+			case w.scanSignal <- struct{}{}:
+			default:
+			}
+		})
+		if err != nil {
+			w.log.Warn("windows-acl: directory watcher failed", "root", root, "err", err)
+			continue
+		}
+		w.watchers = append(w.watchers, wv)
 	}
 }
 
@@ -131,6 +166,7 @@ func (w *WindowsACL) maybeSnapshot(rt Runtime, now int64) {
 	w.needResnapshot = false
 	w.policyDigest = digest
 	w.mu.Unlock()
+	w.restartWatchers(roots)
 	w.log.Info("windows-acl: self-heal baseline ready", "files", w.base.Len())
 }
 

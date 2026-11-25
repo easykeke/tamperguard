@@ -20,6 +20,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/baseline"
 	"github.com/easykeke/tamperguard/internal/policy"
 	"github.com/easykeke/tamperguard/internal/token"
+	"github.com/easykeke/tamperguard/internal/watch"
 )
 
 // WindowsACL is the Windows enforcement backend.
@@ -57,6 +58,9 @@ type WindowsACL struct {
 	policyDigest   string
 	healMu         sync.Mutex
 	recent         map[string]int64
+	scanSignal     chan struct{}
+	watchMu        sync.Mutex
+	watchers       []watch.Watcher
 
 	mu      sync.Mutex
 	rt      Runtime
@@ -501,6 +505,12 @@ func (w *WindowsACL) Events() <-chan Event { return w.events.Events() }
 func (w *WindowsACL) Close() error {
 	w.once.Do(func() {
 		close(w.stop)
+		w.watchMu.Lock()
+		for _, wv := range w.watchers {
+			_ = wv.Close()
+		}
+		w.watchers = nil
+		w.watchMu.Unlock()
 		w.events.Close()
 		if w.base != nil {
 			_ = w.base.Close()
