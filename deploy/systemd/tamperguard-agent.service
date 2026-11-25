@@ -1,0 +1,36 @@
+[Unit]
+Description=TamperGuard protection agent
+Documentation=https://github.com/easykeke/tamperguard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The agent must run as root: attaching BPF LSM programs, fanotify marks and
+# restoring protected files all need privileges that cannot be delegated.
+ExecStart=/usr/local/bin/tg-agent run --state-dir /var/lib/tamperguard-agent
+Restart=always
+RestartSec=3
+StateDirectory=tamperguard-agent
+StateDirectoryMode=0700
+UMask=0077
+
+# Capabilities are narrowed to what the enforcers actually use. CAP_DAC_OVERRIDE
+# is required to restore files owned by other users.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_BPF CAP_PERFMON CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_RESOURCE
+AmbientCapabilities=
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+SystemCallArchitectures=native
+# Do not enable ProtectSystem/ProtectHome: the agent must be able to restore
+# files anywhere the policy points at.
+
+[Install]
+WantedBy=multi-user.target

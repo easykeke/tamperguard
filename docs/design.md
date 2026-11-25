@@ -70,14 +70,14 @@ TamperGuard 面向 Linux 主机上的网页目录与发布产物，解决“未�
 | 组件 | 职责 | 明确不负责 |
 |---|---|---|
 | `tg-server` | 管理端 HTTP 服务；REST API；面向 Agent/发布端的 mTLS 接入；SQLite 持久化；CA 与身份签发；策略快照 Ed25519 签名；发布令牌签发与吊销；审计链接收、验链、缺口告警；心跳响应与 SSE 推送（`GET /api/v1/agent/stream`）中的策略、grant 与撤销下发。 | 不执行任何文件系统拦截；不接触发布内容明文（只收 manifest 摘要与审计记录）。 |
-| `tg-agent` | 受保护主机上的 root 守护进程：能力探测、策略同步与验签、eBPF LSM 执行 / fanotify 降级（检测+回滚）/ observe 回退、grant 与撤销校验、审计链记录与上报、15 秒心跳。 | 不存储发布内容；不做内容安全判断；容器内不可运行。 |
+| `tg-agent` | 受保护主机上的 root 守护进程：能力探测、策略同步与验签、eBPF LSM 执行 / fanotify 降级（检测+回滚）/ observe 回退、grant 与撤销校验、审计链记录与上报、15 秒心跳。 | 不存储发布内容；不做内容安全判断；普通容器内不可运行（K8s 需 privileged + hostPID，见 deploy/k8s）。 |
 | `tg-publish` | 发布端 Agent：持有 mTLS 身份，拉取分配给自己的发布申请，遍历源码树计算 manifest，向服务端申请短时效令牌并持有，逐文件复核哈希后写入，上报完成状态。 | 浏览器永远不接触令牌；发布端不自行延长令牌有效期；不绕过目标节点的执行层写文件。 |
 
 ### 2.3 部署约束
 
 | 组件 | 部署要求 |
 |---|---|
-| `tg-agent` | 必须宿主机 root，systemd 管理；不能容器化。容器内无法保证看到宿主内核的 LSM/fanotify 语义，也无法安装 BPF 程序。 |
+| `tg-agent` | 必须宿主机 root，systemd 管理；普通容器不能运行。K8s 场景使用 privileged + hostPID 的 DaemonSet 把受保护路径 hostPath 挂入，见 deploy/k8s。 |
 | `tg-publish` | 生产默认与被保护节点分机（两台机），P0 演示可同机；需要能访问服务端 mTLS 端口。令牌只在本机落盘。 |
 | `tg-server` | 管理端可用 docker compose 部署；集中式单实例，SQLite 单写者。 |
 | 开发/测试 | WSL2 Ubuntu 24.04，内核 6.6，已启用 bpf LSM（`lsm=...,bpf`）；eBPF 执行器代码已落地，`internal/enforcer/ebpf_linux_test.go` 提供 root 级 LSM 阻断测试，真实阻断结果待跑测确认。 |
@@ -385,7 +385,7 @@ BPF hook 拿到的是 dentry、inode、file、vma。执行器当前方向是按 
 - inode 复用：文件删除后 inode 号可能被新文件复用，需要结合 dev 与索引有效期处理，避免把新文件当成旧受保护文件放行（待验证）。
 - 新建文件在创建前没有 inode，只能按父目录 inode 命中 `protected_dirs`，因此“创建”的授权要落在目录 inode 上。
 - rename/link 必须同时检查源与目标两侧 inode，包括父目录；当前实现尚未完全做到，见 5.2 的已知差异。
-- overlayfs copy-up 与硬链接会让 `(dev, ino)` 与路径关系失配，见第 9 节。
+- overlayfs 的 copy-up 已验证不影响 inode 匹配，容器场景的边界见第 9 节。
 - 策略路径很深或经常变化时，用户态遍历与刷新成本需要实测。
 
 最长前缀、observe/enforce 判定与规则选择仍由用户态 `MatchPath` 完成；内核只持有最终生效的 inode 集合。当前 Go 侧只把 `enforce` 规则写入保护集合，`observe` 规则在 eBPF 后端被跳过（C 侧 `MODE_OBSERVE` 已预留，待接线）。
@@ -592,41 +592,42 @@ P1 之后的完善项：补全 hook 边界（跨文件系统 rename、link 别�
 5. 之后的写入不再匹配授权，执行层返回拒绝，审计记录 `write.blocked`。
 6. 残余窗口：从管理员点击撤销到 Agent 应用完成之间的写入仍可能成功；已完成的发布不回滚，也不自动删除已写入文件。
 
-## 9. 容器与 OverlayFS 的已知难点
+## 9. 容器与 OverlayFS（已验证）
 
-当前版本不对容器场景做承诺。以下问题是 P3 的验证内容，不是已解决能力。
+结论先行：**在宿主侧保护 overlay 的 merged 路径，同时覆盖容器内写入**。因为 eBPF LSM 钩子作用在 overlay inode 上，而索引也来自 merged 路径，两者天然一致。`TestOverlayEnforcement` 用真实 overlay 挂载验证：写、创建、删除、rename、chmod 全部被拦；授权 copy-up 写入放行；撤权后即使底层 inode 已因 copy-up 变化仍被拦；授权窗口内新建的子树在撤权后立即受保护。
 
-### 9.1 copy-up 导致 inode 与路径不匹配
+### 9.1 为什么 copy-up 没有造成漏拦
 
-- 容器镜像层是只读的 overlay lower 层。容器进程第一次写 lower 文件时触发 copy-up：内容复制到 upper 层，产生新的 inode。
-- 受保护路径如果按“路径前缀”匹配，copy-up 前后路径可能不变，但 inode 变了；如果按 inode 保护，copy-up 后旧 inode 不再是被写入对象，必须能跟上新 inode。
-- overlayfs 对目录与文件的 inode 编号处理不同（目录可能保留编号，文件通常变化），依赖 `i_ino` 做唯一标识并不可靠。
-- rename 在 overlay 上可能触发多层 copy-up/whiteout，hook 看到的是 overlay 层的 dentry，底层路径与容器内路径不一致。
+- 用户态遍历 merged 路径得到 `(dev, ino)`，写入时 `file_permission`/`inode_permission` 看到的也是 overlay 层 inode；copy-up 改变的是底层真实 inode，VFS 暴露给钩子的仍是同一个 overlay inode。
+- 目录级判定用父目录 inode，覆盖“新文件”场景；`d_instantiate` 让新建子树即时入索引并继承授权。
+- 因此不需要早期设想的“路径 + inode 双重匹配”补丁；那种失配只发生在**直接索引 lowerdir/upperdir 真实 inode** 的方案里。
 
-### 9.2 命名空间与路径视角
+### 9.2 仍然存在的边界
 
-- 同一个 inode 在不同 mount namespace 中有不同路径；Agent 在宿主命名空间看到的是宿主视角，容器进程看到的路径不同。
-- bind mount、`/proc/<pid>/root`、chroot 会造成同一路径字符串指向不同对象。
-- 预先存在的硬链接、绑定挂载别名会让“按路径保护”失效；按 inode 保护又会遇到 9.1 的稳定性问题。
+| 场景 | 影响 | 处理 |
+|---|---|---|
+| 直接从宿主写 upperdir/lowerdir | 绕过 merged 索引（写的是底层 inode） | 需要宿主 root，超出威胁模型；不要把 upperdir 暴露给业务 |
+| 容器 volume / bind mount | 独立文件系统或独立挂载，需单独写策略路径 | 按挂载点分别加策略 |
+| 容器内路径与宿主路径不同 | 命中判定基于 inode，与路径字符串无关 | 已验证不受影响；审计回填宿主视角路径 |
+| 嵌套 overlay / 特殊存储驱动 | 未验证 | 上线前在目标环境用同款测试自测 |
+| 容器内跑 Agent | 不支持 | 普通容器不行；K8s 用 privileged + hostPID DaemonSet |
 
-### 9.3 路径与 inode 两套索引的对齐
+### 9.3 命名空间与路径视角
 
-当前内核侧按 inode 索引匹配，用户态按路径匹配，两者需要对齐：
+- 写入判定不依赖路径字符串，mount namespace 差异不影响拦截。
+- 路径只用于审计与排障，审计里是 Agent（宿主命名空间）视角。
+- 预先存在的硬链接对 inode 保护天然覆盖（同一 inode）；bind mount 别名需要单独策略路径。
 
-- 用户态遍历策略路径，把路径与 `(dev, inode)` 建成双向索引；内核事件带 dev/ino，用户态回填路径用于审计。
-- copy-up 后 inode 变化、路径不变，需要刷新索引并移除旧 inode。
-- 硬链接、绑定挂载会让同一 inode 对应多个路径，路径策略与 inode 集合可能不一致。
-- 容器内路径与宿主路径视角不同，需要在宿主侧建立映射（未验证）。
-
-### 9.4 当前状态
+### 9.4 状态
 
 | 项目 | 状态 |
 |---|---|
-| 普通目录（非 overlay）上的 inode 索引匹配 | 代码已落地，待内核验证 |
-| inode 复用与索引刷新 | 待验证 |
-| overlayfs copy-up 行为验证 | P3，待验证 |
-| 容器内路径视角与宿主视角对齐 | P3，待验证 |
-| 容器内运行 Agent | 明确不支持，必须宿主机 root |
+| 普通目录（ext4/tmpfs）inode 匹配 | 已验证 |
+| overlayfs merged 路径拦截与 copy-up | **已验证**（`TestOverlayEnforcement`） |
+| 授权窗口内新建子树（overlay） | 已验证（继承 + 撤权后立即拦截） |
+| 容器内路径视角 | 不影响判定；审计为宿主视角 |
+| 容器内运行 Agent | 不支持（K8s 需 privileged + hostPID） |
+| 部署形态 | systemd / docker compose（仅管理端）/ K8s DaemonSet，见 `deploy/README.md` |
 
 ## 10. 性能与限制
 
@@ -701,7 +702,7 @@ sudo go test ./internal/enforcer -run NO_TESTS -bench . -benchtime=2000x
 | P0 骨架 | 三端工程结构、核心库、REST API、SQLite、mTLS enrollment、策略签发与同步、15 秒心跳、审计上报与验链、eBPF LSM 执行器（13 个 hook、inode 保护集合与授权 map、ringbuf）、observe 回退、用户态 e2e、`make build` | 核心库、控制面、两个 Agent、eBPF 执行器代码与 e2e 已落地；内核真实阻断已在 Linux 6.6 + bpf LSM 验证 | 同机 e2e + 内核验证：发布放行、webshell 写入被拒（需 bpf LSM 与 publisher uid 配置）、吊销后拒绝、审计验链 |
 | P1 内核主阻断完善 | mmap 父目录、link 源 inode、单文件规则 unlink/rename、observe 接线、SSE 推送与授权确认、新建子树的内核继承（d_instantiate）、性能基准均已完成；5.10 兼容待做 | 基本完成 | 5.10 与 6.6 至少各验证一次 |
 | P2 降级恢复 | fanotify 检测+回滚、基线、周期巡检、审批流、降级标红已完成；队列溢出处理与崩溃窗口恢复待补 | 基本完成 | `test/e2e/e2e-fanotify.sh` 通过 |
-| P3 容器与规模化 | overlayfs copy-up 的路径+inode 双重匹配验证、容器场景、多节点规模、审计保留与导出 | 未实现，待验证 | 容器场景有明确的支持/不支持清单，不靠推断 |
+| P3 容器与规模化 | overlayfs/容器场景已验证（`TestOverlayEnforcement`），部署形态齐备；多节点规模、审计保留与导出、自升级签名未做 | 部分完成 | 容器边界清单见第 9.2 节，不靠推断 |
 | P4 RASP | 运行期应用层防护 | 未实现，范围未定 | 另行立项评估，本文不承诺任何应用层能力 |
 
 路线中的顺序不是强制的，但以下表述边界必须遵守：eBPF 执行器未在目标内核验证前，不能写“已实测拦截”；hook 矩阵未完整覆盖前，不能写“所有写入原语已覆盖”；P4 未实现前，不能出现“应用层防护”。

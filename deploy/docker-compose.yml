@@ -1,0 +1,31 @@
+# Control plane only. The agents must run on the protected hosts themselves
+# (they attach kernel programs and read host files), so they are not part of
+# this compose file.
+#
+# First run, once:
+#   docker compose run --rm server tg-server init --data-dir /data
+# copy the printed admin password and bootstrap tokens, then:
+#   docker compose up -d
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    image: tamperguard/server:0.1.0
+    container_name: tamperguard-server
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - tamperguard-data:/data
+    command: ["tg-server", "serve", "--data-dir", "/data"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  tamperguard-data:

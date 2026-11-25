@@ -1,0 +1,106 @@
+# TamperGuard protection agent as a Kubernetes DaemonSet.
+#
+# The agent must see the host kernel and host filesystem, so this DaemonSet runs
+# privileged in the host PID namespace. It is the one supported containerised
+# deployment; the normal case is a systemd unit on the host (deploy/systemd).
+#
+# Before applying:
+#   1. create the namespace + secret (see secret.example.yaml)
+#   2. adjust the hostPath mounts so they match the policy paths
+#   3. set PUBLISHER_UIDS to the uid that runs tg-publish on this node
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tamperguard
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: tamperguard-agent
+  namespace: tamperguard
+  labels:
+    app.kubernetes.io/name: tamperguard-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tamperguard-agent
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tamperguard-agent
+    spec:
+      hostPID: true
+      hostNetwork: false
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: agent
+          image: tamperguard/agent:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if [ ! -f /state/agent.json ]; then
+                tg-agent enroll \
+                  --server "$TG_SERVER_URL" \
+                  --bootstrap "$TG_BOOTSTRAP_TOKEN" \
+                  --ca /etc/tamperguard/ca.crt \
+                  --state-dir /state \
+                  --publisher-uids "${TG_PUBLISHER_UIDS:-0}"
+              fi
+              exec tg-agent run --state-dir /state
+          env:
+            - name: TG_SERVER_URL
+              valueFrom:
+                secretKeyRef: { name: tamperguard-agent, key: server-url }
+            - name: TG_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef: { name: tamperguard-agent, key: bootstrap-token }
+            - name: TG_PUBLISHER_UIDS
+              value: "0"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef: { fieldPath: spec.nodeName }
+          securityContext:
+            # BPF LSM attach, fanotify and file restore all need host privileges.
+            privileged: true
+            readOnlyRootFilesystem: true
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - name: state
+              mountPath: /state
+            - name: ca
+              mountPath: /etc/tamperguard
+              readOnly: true
+            - name: btf
+              mountPath: /sys/kernel/btf
+              readOnly: true
+            # Example protected host paths. They must match the policy paths, and
+            # the agent needs write access to restore content.
+            - name: www
+              mountPath: /srv/www
+      volumes:
+        - name: state
+          hostPath:
+            path: /var/lib/tamperguard-agent
+            type: DirectoryOrCreate
+        - name: ca
+          secret:
+            secretName: tamperguard-agent
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: btf
+          hostPath:
+            path: /sys/kernel/btf
+            type: Directory
+        - name: www
+          hostPath:
+            path: /srv/www
+            type: Directory

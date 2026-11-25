@@ -1,0 +1,20 @@
+# Multi-stage build for the control plane. Agents are built the same way but
+# are installed on hosts, not shipped as images.
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN make build
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/bin/tg-server /usr/local/bin/tg-server
+RUN useradd --system --uid 10001 --home /data tamperguard \
+    && mkdir -p /data && chown tamperguard:tamperguard /data
+USER tamperguard
+WORKDIR /data
+EXPOSE 8443
+ENTRYPOINT ["/usr/local/bin/tg-server"]
+CMD ["serve", "--data-dir", "/data"]
