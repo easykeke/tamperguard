@@ -1,5 +1,11 @@
 # 变更记录
 
+## 未发布（0.2.0 开发中）
+
+- **Windows 被防护端（实验性）**：ACL 锁定执行层（SYSTEM/Administrators 全权、Everyone 只读，发布窗口临时授权发布账号），`--publisher-sids` 配置授权账号；`tg-agent probe` 可检测平台并报告执行层；Agent 以管理员运行是前提。
+- **路径模型跨平台**：策略/令牌路径统一支持 `C:\...` 与 UNC（内部规范为 `C:/...`，Windows 路径比较不区分大小写）；`tg-agent unlock` 恢复继承权限。
+- **先进技术调研**：`docs/advanced-techniques.md` 梳理 Windows minifilter / 完整性级别 / USN、Linux Landlock / fs-verity / IMA 与不可变基础设施路线，并给出演进优先级。
+
 ## 0.1.0（首个完整版本）
 
 ### 防护能力

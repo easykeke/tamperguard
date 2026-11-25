@@ -48,6 +48,10 @@ e2e-fanotify:
 e2e-upgrade:
 	bash test/e2e/e2e-upgrade.sh
 
+## build-windows: cross-compiled Windows binaries (linux/amd64 host)
+build-windows:
+	bash scripts/build-windows.sh
+
 ## rasp-java: build the Java agent jar (needs JDK 17+)
 rasp-java:
 	bash rasp/java/build.sh

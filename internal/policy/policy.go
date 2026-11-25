@@ -214,9 +214,9 @@ func (p *Policy) MatchPath(target string) (PathRule, bool) {
 		if !ok {
 			continue
 		}
-		covered := tp == base
+		covered := token.PathCovered(base, tp)
 		if r.Recursive && !covered {
-			covered = strings.HasPrefix(tp, base+"/") || base == "/"
+			covered = base == "/" || base == "//"
 		}
 		if !covered {
 			continue

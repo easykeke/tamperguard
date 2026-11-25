@@ -90,11 +90,13 @@ func New(state *config.AgentState, enf enforcer.Enforcer, opts Options) (*Agent,
 		}
 		srv, err := rasp.New(socket, a.onRASPEvent, opts.Logger)
 		if err != nil {
-			f.Close()
-			return nil, fmt.Errorf("agent: start rasp probe socket: %w", err)
+			// The RASP channel is an extra layer: failing to open the socket
+			// must not stop the protection agent (e.g. AF_UNIX unavailable).
+			a.log.Warn("rasp probe socket unavailable; continuing without runtime probe", "socket", socket, "err", err)
+		} else {
+			a.rasp = srv
+			a.log.Info("rasp probe socket listening", "socket", socket)
 		}
-		a.rasp = srv
-		a.log.Info("rasp probe socket listening", "socket", socket)
 	}
 	return a, nil
 }

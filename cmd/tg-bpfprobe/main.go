@@ -1,3 +1,5 @@
+//go:build linux
+
 // Command tg-bpfprobe is a diagnostic helper: it attaches the eBPF LSM
 // programs, protects one directory and holds the protection for a while so the
 // behaviour can be inspected from another shell (bpftool, manual writes).

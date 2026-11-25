@@ -154,6 +154,9 @@ type AgentState struct {
 	// the operating-system users whose processes may consume a live grant.
 	// The kernel cannot see agent identities, only uids.
 	PublisherUIDs []int `json:"publisher_uids,omitempty"`
+	// PublisherSIDs is the Windows equivalent: account SIDs or names allowed
+	// to consume a grant while a release token is live.
+	PublisherSIDs []string `json:"publisher_sids,omitempty"`
 }
 
 // LoadAgentState reads <stateDir>/agent.json.

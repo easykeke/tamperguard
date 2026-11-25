@@ -59,7 +59,27 @@ selected      : ebpf-lsm (degraded=false)
 
 Java 说明：探针通过 SecurityManager 拦截 `FilePermission` 的 write/delete 检查，覆盖 `java.io.FileOutputStream`、`File#delete`、`Files.write/newOutputStream/delete/move` 等；SecurityManager 在新 JDK 中被标记移除，装不上时探针只打警告、不会假装在防护。
 
-## 5. 自升级兼容性
+## 5. Windows 被防护端（实验性）
+
+Windows 没有 eBPF LSM，也没有 fanotify 等价物；用户态可用的同步阻断只有系统自带的访问控制。当前实现选择 **NTFS ACL 锁定**：
+
+| 项 | 要求 / 行为 |
+|---|---|
+| 权限 | Agent 必须以管理员或 SYSTEM 运行（否则 `windows-acl` 不可用，自动降级 observe 并上报 degraded） |
+| 文件系统 | NTFS（ACL 与继承语义依赖）；ReFS 未验证 |
+| 保护方式 | 对策略中的 enforce 路径设置显式 DACL：SYSTEM/Administrators 完全控制，Everyone 只读+执行；子对象继承 |
+| 发布窗口 | 令牌有效期内给 `--publisher-sids` 配置的账号追加写+删除 ACE，到期/吊销后重新应用 DACL 收回 |
+| 阻断边界 | 阻断非管理员进程的写入/删除/重命名；管理员（含以 SYSTEM 运行的 IIS 应用池）不受限 |
+| 审计 | 无内核事件：只有策略应用/错误与 RASP 事件进审计链，**不产生每次写操作记录** |
+| 卸载/回滚 | `tg-agent unlock --state-dir ...` 恢复继承权限；Agent 退出或崩溃**不会**自动解锁（防止防护静默消失） |
+
+实测限制与后续路线：
+
+- IIS 应用池若以 SYSTEM 运行，等于管理员身份，ACL 挡不住；需要把应用池降到专用低权账户（安全基线本来也要求这样做）。
+- 拿不到写者身份；需要"谁写的"审计时上 Windows 过滤驱动（minifilter）或 USN/ETW 方案，见 [先进技术调研](advanced-techniques.md)。
+- 更完整的方案对比（minifilter 签名成本、完整性级别 MIC、USN 恢复）见 `docs/advanced-techniques.md`。
+
+## 6. 自升级兼容性
 
 - Agent 与服务端使用同一份 Ed25519 发布密钥签名 manifest；老版本 Agent（无升级通道）不受影响。
 - 升级按 `os/arch` 选择产物，当前只支持与 Agent 相同的平台。

@@ -25,6 +25,19 @@ jobs:
       - name: userspace e2e
         run: sudo bash test/e2e/e2e-sim.sh
 
+  windows-build:
+    # The Windows enforcement backend (ACL lockdown) is not exercised here: that
+    # needs an elevated Windows host. This job only proves the tree still
+    # cross-compiles and that no Linux-only API leaked into shared code.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: cross-compile for Windows
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
   bpf-build:
     # Verifies the eBPF program still compiles and the binaries build with the
     # regenerated object. Actual LSM enforcement cannot run on hosted runners

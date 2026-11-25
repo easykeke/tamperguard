@@ -2,7 +2,7 @@
 
 TamperGuard 是面向 Linux 主机的网页目录防篡改系统：内核层同步拒绝未授权写入，发布写入由内容哈希绑定的短时效令牌授权，所有写入行为进入可校验的链式审计。
 
-先把边界写明：不防 root；当前版本没有应用层 RASP（P4 规划）；只覆盖策略列出的路径；仅支持 Linux。拿到 root 的攻击者可以停执行层、改策略、删审计，本产品只能留下事后可检测的痕迹，不做“全面防护”。
+先把边界写明：不防 root（Windows 上是不防管理员）；覆盖策略列出的路径；Linux 用 eBPF LSM 同步阻断（不可用时降级 fanotify 检测+回滚），Windows 用 NTFS ACL 锁定（无驱动，标记 degraded）；RASP 覆盖 Node.js 与 Java；发布支持本机与跨机（pull）两种形态。拿到 root/管理员权限的攻击者可以停执行层、改策略、删审计，本产品只能留下事后可检测的痕迹，不做“全面防护”。
 
 ## 核心设计
 
@@ -11,6 +11,7 @@ TamperGuard 是面向 Linux 主机的网页目录防篡改系统：内核层同�
 | 内容哈希绑定令牌 | 令牌绑定发布端身份、目标节点、路径范围与 release manifest 的 SHA-256 摘要，TTL ≤15 分钟，可吊销。令牌只证明“谁可以写”，manifest 摘要才证明“写的是批准的内容”。 | 不判断发布内容是否安全；发布端在提交 manifest 前被控制时，摘要绑定无法阻止恶意内容。 |
 | 链式审计 | 每条记录带单调 seq、prev hash、自身 hash 与 Ed25519 签名；服务端按 Agent 追踪 `(next_seq, last_hash)`，出现缺口或分叉立即告警。 | 链式哈希只能发现修改；防删除靠 seq 与服务端缺口检测；拿到 Agent 私钥的 root 可伪造。 |
 | 内核同步阻断 | eBPF LSM 在 open/write/create/unlink/rename/setattr/mmap 等原语进入前拒绝未授权写入，不是事后扫描。内核不支持或加载失败时回退 observe（不阻断，也不会自动记录真实写入），并标记 degraded。 | 不覆盖网络文件系统保证、容器 OverlayFS（P3 验证）、已打开 fd 之外的任意 root 行为；P0 的 fanotify 降级尚未实现（P2）。 |
+| 跨平台执行层 | Windows 没有 eBPF/fanotify 对应物：用 NTFS ACL 锁定（SYSTEM/Administrators 全权、Everyone 只读），发布窗口给发布账号临时加写权限，到期或吊销即收回；执行层由平台自动选择，`tg-agent probe` 可查看结果。 | 挡不住管理员；拿不到每次写事件；第三方安全软件重置 ACL 后需要重新应用。先进路线（minifilter 驱动、完整性级别）见 [先进技术调研](docs/advanced-techniques.md)。 |
 
 ## 架构
 
@@ -74,7 +75,7 @@ sudo ./bin/tg-agent run --state-dir /var/lib/tamperguard-agent
 | 待完成 | 审计里新建文件的路径可能只回填 `inode:<号>`；5.10/6.1 内核兼容性未验证（当前只在 6.6 上验过）；fanotify 的队列溢出与崩溃窗口处理、超大文件树的增量巡检待补；审计保留周期与归档未实现。 |
 | 未实现 | 规模化（Postgres、多节点压测、审计归档）；RASP 的 PHP 探针；Java 探针仅支持 JDK 16–21（SecurityManager 后续版本被移除）。 |
 
-已验证的边界：eBPF 的 inode 匹配在普通本地文件系统（ext4/xfs/tmpfs）上有效；OverlayFS 容器场景需要 P3 的 copy-up 映射，当前未验证。节点实际执行层以心跳上报的 `enforcer` 字段为准：`ebpf-lsm` 才是内核阻断，`observe` 表示没有阻断，也不会自动记录真实写入。
+已验证的边界：eBPF 的 inode 匹配在普通本地文件系统（ext4/xfs/tmpfs）上有效，OverlayFS 容器场景已验证（copy-up 后仍受保护）。节点实际执行层以心跳上报的 `enforcer` 字段为准：`ebpf-lsm` 是内核同步阻断，`fanotify` 是检测+回滚，`windows-acl` 是 ACL 锁定，`observe` 表示没有阻断。Windows 被防护端为实验性能力（ACL 后端已实现并通过交叉编译与探针验证，尚未在 IIS 生产环境实测）。
 
 复现验证：
 

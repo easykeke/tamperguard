@@ -228,25 +228,85 @@ func (c *Claims) CheckManifest(actualDigest string) error {
 
 // NormalizePath returns the canonical absolute form of p, or false if p is
 // not an absolute path, contains a traversal element, or is not clean.
+//
+// Two families are accepted and kept in a single canonical spelling:
+//
+//	Unix      "/var/www/site"        (kept as is)
+//	Windows   `C:\inetpub\wwwroot`   -> "C:/inetpub/wwwroot"
+//	          `\\server\share\dir`   -> "//server/share/dir"
+//
+// Windows paths are stored with forward slashes so that the policy, token and
+// enforcement layers share one representation regardless of the host the
+// control plane runs on.
 func NormalizePath(p string) (string, bool) {
-	if p == "" || !strings.HasPrefix(p, "/") {
+	if p == "" || strings.Contains(p, "\x00") {
 		return "", false
 	}
-	if strings.Contains(p, "\x00") {
+	if strings.HasPrefix(p, "/") {
+		if strings.HasPrefix(p, "//") {
+			return normalizeUNC(p)
+		}
+		if hasTraversal(p, "/") {
+			return "", false
+		}
+		return path.Clean(p), true
+	}
+	if len(p) < 3 || !isASCIILetter(p[0]) || p[1] != ':' || (p[2] != '\\' && p[2] != '/') {
 		return "", false
 	}
-	// Reject any ".." element outright instead of silently cleaning it: a
-	// path arriving from the kernel or an untrusted caller with ".." in it is
-	// a sign of an attempted bypass.
-	for _, seg := range strings.Split(p, "/") {
+	q := strings.ReplaceAll(p, "\\", "/")
+	if hasTraversal(q, "/") {
+		return "", false
+	}
+	c := path.Clean(q)
+	if len(c) == 2 && c[1] == ':' {
+		c += "/"
+	}
+	return strings.ToUpper(c[:1]) + c[1:], true
+}
+
+func normalizeUNC(p string) (string, bool) {
+	q := strings.ReplaceAll(p, "\\", "/")
+	parts := strings.Split(q, "/")
+	var kept []string
+	for _, seg := range parts {
+		if seg == "" || seg == "." {
+			continue
+		}
 		if seg == ".." {
 			return "", false
 		}
+		kept = append(kept, seg)
 	}
-	return path.Clean(p), true
+	if len(kept) < 2 {
+		return "", false
+	}
+	return "//" + strings.Join(kept, "/"), true
 }
 
-// PathCovered reports whether target equals base or lives below it.
+func hasTraversal(p, sep string) bool {
+	for _, seg := range strings.Split(p, sep) {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// isWindowsCanonical reports whether a normalized path uses Windows spelling.
+func isWindowsCanonical(p string) bool {
+	if strings.HasPrefix(p, "//") {
+		return true
+	}
+	return len(p) >= 3 && p[1] == ':' && isASCIILetter(p[0])
+}
+
+// PathCovered reports whether target equals base or lives below it. Windows
+// paths are compared case-insensitively because the filesystem is.
 func PathCovered(base, target string) bool {
 	b, ok := NormalizePath(base)
 	if !ok {
@@ -256,8 +316,16 @@ func PathCovered(base, target string) bool {
 	if !ok {
 		return false
 	}
-	if b == "/" {
+	if isWindowsCanonical(b) || isWindowsCanonical(t) {
+		b = strings.ToLower(b)
+		t = strings.ToLower(t)
+	}
+	if b == "/" || b == "//" {
 		return true
+	}
+	if len(b) >= 3 && b[1] == ':' && b[2:] == "/" {
+		// drive root: C:/ covers everything on C:
+		return t == b || strings.HasPrefix(t, b)
 	}
 	return t == b || strings.HasPrefix(t, b+"/")
 }

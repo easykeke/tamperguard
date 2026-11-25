@@ -406,6 +406,7 @@ type EnrollOptions struct {
 	PublishDir     string
 	PollSeconds    int
 	PublisherUIDs  []int
+	PublisherSIDs  []string
 }
 
 type enrollResponse struct {
@@ -541,6 +542,7 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*config.AgentState, error)
 		PublishDir:    opts.PublishDir,
 		PollSeconds:   poll,
 		PublisherUIDs: opts.PublisherUIDs,
+		PublisherSIDs: opts.PublisherSIDs,
 	}
 	if err := config.SaveAgentState(opts.StateDir, state); err != nil {
 		return nil, err

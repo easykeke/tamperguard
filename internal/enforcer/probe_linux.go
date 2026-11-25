@@ -4,7 +4,6 @@ package enforcer
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -24,24 +23,11 @@ func ensureSecurityFS() {
 	_ = unix.Mount("securityfs", "/sys/kernel/security", "securityfs", 0, "")
 }
 
-// ProbeReport is the result of a capability probe on this host.
-type ProbeReport struct {
-	KernelRelease string `json:"kernel_release"`
-	KernelCmdline string `json:"kernel_cmdline"`
-	LSMActive     string `json:"lsm_active"`
-	LSMHasBPF     bool   `json:"lsm_has_bpf"`
-	HasBTF        bool   `json:"has_btf"`
-	BPFLoadError  string `json:"bpf_load_error,omitempty"`
-	FanotifyError string `json:"fanotify_error,omitempty"`
-	Selected      string `json:"selected"`
-	Degraded      bool   `json:"degraded"`
-}
-
 // Probe inspects the host and reports which backend Select would pick, and why
 // the stronger ones are unavailable. It actually loads and attaches the eBPF
 // programs and initialises fanotify, so a node can be checked before rollout.
 func Probe(stateDir string) ProbeReport {
-	rep := ProbeReport{}
+	rep := ProbeReport{OS: "linux"}
 	ensureSecurityFS()
 	if raw, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
 		rep.KernelRelease = strings.TrimSpace(string(raw))
@@ -101,25 +87,4 @@ func SecurityFSMountHint() string {
 		return "mounted on demand: " + strings.TrimSpace(string(bytes.TrimSpace(raw)))
 	}
 	return ""
-}
-
-// FormatProbe renders a report for humans.
-func FormatProbe(r ProbeReport) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "kernel        : %s\n", r.KernelRelease)
-	fmt.Fprintf(&b, "cmdline       : %s\n", r.KernelCmdline)
-	fmt.Fprintf(&b, "lsm active    : %s (bpf=%v)\n", r.LSMActive, r.LSMHasBPF)
-	fmt.Fprintf(&b, "kernel BTF    : %v\n", r.HasBTF)
-	if r.BPFLoadError != "" {
-		fmt.Fprintf(&b, "eBPF LSM      : unavailable: %s\n", r.BPFLoadError)
-	} else {
-		fmt.Fprintf(&b, "eBPF LSM      : available\n")
-	}
-	if r.FanotifyError != "" {
-		fmt.Fprintf(&b, "fanotify      : unavailable: %s\n", r.FanotifyError)
-	} else {
-		fmt.Fprintf(&b, "fanotify      : available\n")
-	}
-	fmt.Fprintf(&b, "selected      : %s (degraded=%v)\n", r.Selected, r.Degraded)
-	return b.String()
 }

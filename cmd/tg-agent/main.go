@@ -37,6 +37,8 @@ func main() {
 		err = cmdRun(os.Args[2:])
 	case "probe":
 		err = cmdProbe(os.Args[2:])
+	case "unlock":
+		err = cmdUnlock(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -55,8 +57,9 @@ func usage() {
 	fmt.Fprint(os.Stderr, `TamperGuard protection agent
 
   tg-agent enroll --server URL --bootstrap TOKEN --ca FILE [--role protect] [--state-dir DIR]
-  tg-agent run    [--state-dir DIR] [--enforcer auto|ebpf|fanotify|observe]
+  tg-agent run    [--state-dir DIR] [--enforcer auto|ebpf|fanotify|windows-acl|observe]
   tg-agent probe  [--state-dir DIR]
+  tg-agent unlock [--state-dir DIR]   (Windows: restore inherited permissions)
 `)
 }
 
@@ -71,6 +74,7 @@ func cmdEnroll(args []string) error {
 	publishDir := fs.String("publish-dir", "", "default publish directory (publish role)")
 	poll := fs.Int("poll", 15, "sync interval in seconds")
 	publisherUIDs := fs.String("publisher-uids", "0", "comma-separated uids allowed to use a live release grant")
+	publisherSIDs := fs.String("publisher-sids", "", "comma-separated Windows accounts/SIDs allowed to use a live grant")
 	_ = fs.Parse(args)
 
 	state, err := agent.Enroll(context.Background(), agent.EnrollOptions{
@@ -83,12 +87,37 @@ func cmdEnroll(args []string) error {
 		PublishDir:     *publishDir,
 		PollSeconds:    *poll,
 		PublisherUIDs:  parseIntList(*publisherUIDs),
+		PublisherSIDs:  parseStringList(*publisherSIDs),
 	})
 	if err != nil {
 		return err
 	}
 	fmt.Printf("enrolled as %s (role %s)\nstate written to %s\n", state.AgentID, state.Role, *stateDir)
 	return nil
+}
+
+// cmdUnlock restores inherited permissions on Windows (explicit operator
+// action; the agent never unlocks on shutdown or crash).
+func cmdUnlock(args []string) error {
+	fs := flag.NewFlagSet("unlock", flag.ExitOnError)
+	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
+	_ = fs.Parse(args)
+	if err := enforcer.Unlock(*stateDir); err != nil {
+		return err
+	}
+	fmt.Println("inherited permissions restored for previously protected paths")
+	return nil
+}
+
+func parseStringList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func parseIntList(s string) []int {
@@ -143,6 +172,7 @@ func cmdRun(args []string) error {
 	}
 	enf, err := enforcer.SelectKind(*backend, enforcer.Options{
 		PublisherUIDs: state.PublisherUIDs,
+		PublisherSIDs: state.PublisherSIDs,
 		StateDir:      *stateDir,
 	})
 	if err != nil {
