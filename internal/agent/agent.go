@@ -205,6 +205,15 @@ func (a *Agent) sync(ctx context.Context) error {
 		snap = resp.Policy
 	}
 
+	// Translate the policy's allowed writers into kernel uids BEFORE applying
+	// the runtime: the grant map is built from the uid set, so configuring uids
+	// afterwards would leave the current token without grant entries.
+	if cfg, ok := a.enf.(enforcer.UIDConfigurer); ok {
+		uids := effectivePublisherUIDs(a.state.PublisherUIDs, snap)
+		if err := cfg.SetPublisherUIDs(uids); err != nil {
+			a.log.Warn("update publisher uids failed", "err", err)
+		}
+	}
 	rt := enforcer.Runtime{
 		Policy:      snap,
 		Grants:      resp.Grants,
@@ -246,6 +255,32 @@ func (a *Agent) sync(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// effectivePublisherUIDs merges the configured publisher uids with the uids
+// declared by process writer rules in the policy. Duplicates are removed and
+// order is stable so repeated syncs are idempotent.
+func effectivePublisherUIDs(base []int, snap *policy.Snapshot) []int {
+	seen := make(map[int]bool, len(base)+4)
+	out := make([]int, 0, len(base)+4)
+	add := func(uid int) {
+		if seen[uid] {
+			return
+		}
+		seen[uid] = true
+		out = append(out, uid)
+	}
+	for _, u := range base {
+		add(u)
+	}
+	if snap != nil {
+		for _, w := range snap.Policy.Writers {
+			if w.Kind == policy.WriterProcess && w.UID != nil {
+				add(*w.UID)
+			}
+		}
+	}
+	return out
 }
 
 func sameStrings(a, b []string) bool {

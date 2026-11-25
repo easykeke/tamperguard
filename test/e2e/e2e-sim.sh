@@ -124,6 +124,14 @@ ACOUNT=$(jq 'length' "$DATA/audit.json")
 curl -sk -b "$DATA/cookies" "$BASE/api/v1/audit/verify?node_id=$PROT_ID" > "$DATA/verify.json"
 jq -e '.ok == true' "$DATA/verify.json" >/dev/null && ok "audit chain verified" || { cat "$DATA/verify.json"; bad "chain verification failed"; }
 
+say "audit export"
+EXPORT_LINES=$(curl -sk -b "$DATA/cookies" "$BASE/api/v1/audit/export?node_id=$PROT_ID&format=jsonl" | wc -l)
+[ "$EXPORT_LINES" -ge 1 ] && ok "JSONL export produced $EXPORT_LINES lines" || bad "JSONL export empty"
+EXPORT_ROWS=$(curl -sk -b "$DATA/cookies" "$BASE/api/v1/audit/export?node_id=$PROT_ID&format=csv" | wc -l)
+[ "$EXPORT_ROWS" -ge 2 ] && ok "CSV export produced $EXPORT_ROWS lines (header + records)" || bad "CSV export empty"
+curl -sk -b "$DATA/cookies" -o /dev/null -w '%{http_code}\n' "$BASE/api/v1/audit/export?format=xml" > "$DATA/badfmt.txt"
+grep -q '400' "$DATA/badfmt.txt" && ok "unknown export format rejected" || bad "unknown export format accepted"
+
 say "revocation"
 curl -sk -b "$DATA/cookies" -X POST "$BASE/api/v1/revocations" \
   -H 'Content-Type: application/json' -d '{"kind":"subject","value":"'"$PUB_ID"'","reason":"e2e"}' >/dev/null

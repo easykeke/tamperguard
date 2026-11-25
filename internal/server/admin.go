@@ -3,10 +3,14 @@ package server
 import (
 	"crypto/ed25519"
 	"crypto/x509"
+	"encoding/csv"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/easykeke/tamperguard/internal/audit"
 	"github.com/easykeke/tamperguard/internal/policy"
@@ -420,6 +424,55 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		recs = []audit.Record{}
 	}
 	writeJSON(w, http.StatusOK, recs)
+}
+
+// handleAuditExport streams audit records as JSON Lines or CSV for compliance
+// evidence collection.
+func (s *Server) handleAuditExport(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	format := q.Get("format")
+	if format == "" {
+		format = "jsonl"
+	}
+	if format != "jsonl" && format != "csv" {
+		writeErr(w, http.StatusBadRequest, "invalid", "format must be jsonl or csv")
+		return
+	}
+	recs, err := s.st.ListAudit(store.AuditFilter{
+		NodeID: q.Get("node_id"),
+		Kind:   q.Get("kind"),
+		Limit:  int(parseUint(q.Get("limit"), 100000)),
+		From:   int64(parseUint(q.Get("from"), 0)),
+		To:     int64(parseUint(q.Get("to"), 0)),
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	filename := fmt.Sprintf("tamperguard-audit-%s.%s", time.Now().UTC().Format("20060102-150405"), format)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	if format == "jsonl" {
+		w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+		enc := json.NewEncoder(w)
+		for _, rec := range recs {
+			if err := enc.Encode(rec); err != nil {
+				return
+			}
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"seq", "time_utc", "agent", "kind", "decision", "path", "op", "subject", "token_id", "detail", "hash", "prev_hash"})
+	for _, rec := range recs {
+		_ = cw.Write([]string{
+			strconv.FormatUint(rec.Seq, 10),
+			time.Unix(rec.Time, 0).UTC().Format(time.RFC3339),
+			rec.AgentID, rec.Kind, rec.Decision, rec.Path, rec.Op,
+			rec.Subject, rec.TokenID, rec.Detail, rec.Hash, rec.PrevHash,
+		})
+	}
+	cw.Flush()
 }
 
 func (s *Server) handleAuditState(w http.ResponseWriter, r *http.Request) {

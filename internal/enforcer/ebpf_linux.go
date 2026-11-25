@@ -165,19 +165,9 @@ func NewEBPF(publisherUIDs []int) (*EBPF, error) {
 	// Publisher uids drive in-kernel grant inheritance for newly created
 	// inodes; without them a nested directory created during a release would
 	// be protected but not yet granted.
-	if len(publisherUIDs) > 0 {
-		var cfg tgPubCfg
-		cfg.Count = uint32(len(publisherUIDs))
-		for i, uid := range publisherUIDs {
-			if i >= len(cfg.Uids) {
-				break
-			}
-			cfg.Uids[i] = uint32(uid)
-		}
-		if err := objs.Publishers.Update(uint32(0), cfg, ebpf.UpdateAny); err != nil {
-			e.Close()
-			return nil, fmt.Errorf("ebpf: set publisher uids: %w", err)
-		}
+	if err := e.writePublisherUIDs(publisherUIDs); err != nil {
+		e.Close()
+		return nil, err
 	}
 	rd, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -349,6 +339,41 @@ func (e *EBPF) reconcileGrants(desired map[tgGrantKey]uint64) {
 			_ = e.objs.Grants.Delete(key)
 		}
 	}
+}
+
+// SetPublisherUIDs updates the uids allowed to consume grants. It is called
+// whenever the policy changes, so that process writer rules (which carry a uid)
+// take effect without restarting the agent.
+func (e *EBPF) SetPublisherUIDs(uids []int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.publisherUIDs = uids
+	return e.writePublisherUIDsLocked(uids)
+}
+
+// writePublisherUIDs writes the kernel map; callers hold no lock or are in
+// construction.
+func (e *EBPF) writePublisherUIDs(uids []int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.writePublisherUIDsLocked(uids)
+}
+
+func (e *EBPF) writePublisherUIDsLocked(uids []int) error {
+	var cfg tgPubCfg
+	cfg.Count = uint32(len(uids))
+	for i, uid := range uids {
+		if i >= len(cfg.Uids) {
+			e.log.Warn("ebpf: more publisher uids than the kernel map holds; extra uids ignored",
+				"configured", len(uids), "capacity", len(cfg.Uids))
+			break
+		}
+		cfg.Uids[i] = uint32(uid)
+	}
+	if err := e.objs.Publishers.Update(uint32(0), cfg, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("ebpf: set publisher uids: %w", err)
+	}
+	return nil
 }
 
 // Stats returns the number of entries currently installed in the kernel maps.

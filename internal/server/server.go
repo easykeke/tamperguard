@@ -172,6 +172,7 @@ func (s *Server) routes() {
 	m.Handle("POST /api/v1/revocations", s.admin(s.handleCreateRevocation))
 
 	m.Handle("GET /api/v1/audit", s.admin(s.handleListAudit))
+	m.Handle("GET /api/v1/audit/export", s.admin(s.handleAuditExport))
 	m.Handle("GET /api/v1/audit/state", s.admin(s.handleAuditState))
 	m.Handle("GET /api/v1/audit/verify", s.admin(s.handleAuditVerify))
 

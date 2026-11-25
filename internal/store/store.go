@@ -113,6 +113,8 @@ type AuditFilter struct {
 	Kind      string
 	Limit     int
 	BeforeSeq int64
+	From      int64 // inclusive, unix seconds
+	To        int64 // inclusive, unix seconds
 }
 
 // Overview is the dashboard summary.
@@ -807,6 +809,14 @@ func (s *Store) ListAudit(f AuditFilter) ([]audit.Record, error) {
 	if f.BeforeSeq > 0 {
 		q += ` AND seq<?`
 		args = append(args, f.BeforeSeq)
+	}
+	if f.From > 0 {
+		q += ` AND ts>=?`
+		args = append(args, f.From)
+	}
+	if f.To > 0 {
+		q += ` AND ts<=?`
+		args = append(args, f.To)
 	}
 	q += ` ORDER BY agent_id, seq DESC LIMIT ?`
 	args = append(args, f.Limit)

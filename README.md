@@ -62,9 +62,9 @@ sudo ./bin/tg-agent run --state-dir /var/lib/tamperguard-agent
 
 | 状态 | 内容 |
 |---|---|
-| 已验证 | 核心库单测（token/policy/audit，覆盖篡改、删除、重放、过期、错误密钥）；控制平面（REST、SQLite、mTLS 注册、策略签名下发、心跳、审计验链）；保护端与发布端全链路；**eBPF LSM 真实阻断**：14 个 hook，`TestEBPFLSMEnforcement` 全部通过（受保护写入 EPERM、读放行、新建/删除被拒、令牌授权可写、撤权后再次被拒、阻断事件上报用户态、observe 规则只记录不阻断）；**新建子树保护继承**（`d_instantiate`，`TestEBPFInheritance`）：授权窗口内新建的目录/文件在内核里即时入索引并继承授权，撤销后无需等待重新同步立即受保护；内核级端到端 `test/e2e/e2e-ebpf.sh` 全部通过（WebShell 写入被内核拒绝 → 发布端凭令牌写入成功 → 吊销后 2 秒内写入被拒 → 审计链校验通过）；**SSE 推送通道**（策略/吊销/授权变更即时下发，心跳作兜底）；**授权传播确认**（发布端等节点确认 grant 已安装再写，失败回退重试）；mmap/mprotect 父目录判定、link 源与目标 inode、单文件规则的 unlink/rename 已补齐；性能基准（design §10.1.1：覆盖写 +13%、读 +1.25µs、新建 +18µs）；**fanotify 降级路径**（检测+回滚：覆盖写毫秒级回滚、新建/删除由周期巡检恢复、授权发布放行、降级节点需管理员审批），`test/e2e/e2e-fanotify.sh` 全部通过；**OverlayFS / 容器场景**（真实 overlay 挂载验证：写/建/删/改名/chmod 全拦、copy-up 后撤权仍拦、继承子树受保护）；部署形态（systemd / docker compose / K8s DaemonSet）；GitHub Actions CI。 |
-| 待完成 | `policy.writers` 里 `kind=process` 的规则尚未映射到内核 uid（当前用 agent 的 `--publisher-uids` 配置）；审计里新建文件的路径可能只回填 `inode:<号>`；5.10/6.1 内核兼容性未验证（当前只在 6.6 上验过）；fanotify 的队列溢出与崩溃窗口处理、超大文件树的增量巡检待补；eBPF 的 inode 匹配在 OverlayFS 上需要 P3 的 copy-up 映射。 |
-| 未实现 | 跨机发布内容传输；规模化（Postgres、审计保留与导出、Agent 自升级签名）；RASP（P4）。 |
+| 已验证 | 核心库单测（token/policy/audit，覆盖篡改、删除、重放、过期、错误密钥）；控制平面（REST、SQLite、mTLS 注册、策略签名下发、心跳、审计验链）；保护端与发布端全链路；**eBPF LSM 真实阻断**：14 个 hook，`TestEBPFLSMEnforcement` 全部通过（受保护写入 EPERM、读放行、新建/删除被拒、令牌授权可写、撤权后再次被拒、阻断事件上报用户态、observe 规则只记录不阻断）；**新建子树保护继承**（`d_instantiate`，`TestEBPFInheritance`）：授权窗口内新建的目录/文件在内核里即时入索引并继承授权，撤销后无需等待重新同步立即受保护；内核级端到端 `test/e2e/e2e-ebpf.sh` 全部通过（WebShell 写入被内核拒绝 → 发布端凭令牌写入成功 → 吊销后 2 秒内写入被拒 → 审计链校验通过）；**SSE 推送通道**（策略/吊销/授权变更即时下发，心跳作兜底）；**授权传播确认**（发布端等节点确认 grant 已安装再写，失败回退重试）；mmap/mprotect 父目录判定、link 源与目标 inode、单文件规则的 unlink/rename 已补齐；性能基准（design §10.1.1：覆盖写 +13%、读 +1.25µs、新建 +18µs）；**fanotify 降级路径**（检测+回滚：覆盖写毫秒级回滚、新建/删除由周期巡检恢复、授权发布放行、降级节点需管理员审批），`test/e2e/e2e-fanotify.sh` 全部通过；**OverlayFS / 容器场景**（真实 overlay 挂载验证：写/建/删/改名/chmod 全拦、copy-up 后撤权仍拦、继承子树受保护）；部署形态（systemd / docker compose / K8s DaemonSet）；**process 写者规则映射到内核 uid**（策略变更即时生效，无需重启 agent）；**审计导出**（JSONL / CSV，带时间范围过滤）；GitHub Actions CI。 |
+| 待完成 | 审计里新建文件的路径可能只回填 `inode:<号>`；5.10/6.1 内核兼容性未验证（当前只在 6.6 上验过）；fanotify 的队列溢出与崩溃窗口处理、超大文件树的增量巡检待补；审计保留周期与归档未实现。 |
+| 未实现 | 跨机发布内容传输；规模化（Postgres、审计保留与归档、Agent 自升级签名）；RASP（P4）。 |
 
 已验证的边界：eBPF 的 inode 匹配在普通本地文件系统（ext4/xfs/tmpfs）上有效；OverlayFS 容器场景需要 P3 的 copy-up 映射，当前未验证。节点实际执行层以心跳上报的 `enforcer` 字段为准：`ebpf-lsm` 才是内核阻断，`observe` 表示没有阻断，也不会自动记录真实写入。
 

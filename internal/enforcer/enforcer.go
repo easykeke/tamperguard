@@ -107,6 +107,14 @@ type Enforcer interface {
 	Close() error
 }
 
+// UIDConfigurer is implemented by backends that need the set of operating
+// system uids allowed to consume release grants. The kernel cannot see agent
+// identities, so policy rules written as "publisher agent X" or "process
+// /usr/bin/rsync uid 1002" have to be translated into uids.
+type UIDConfigurer interface {
+	SetPublisherUIDs(uids []int) error
+}
+
 // Buffer is a small fan-out helper shared by the backends.
 type Buffer struct {
 	mu     sync.Mutex

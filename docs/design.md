@@ -175,7 +175,7 @@ web/                    管理端静态资源（P0，实际目录名以实现为
 | 类型 | 识别方式 | 说明 |
 |---|---|---|
 | 发布端 Agent（`publisher`） | mTLS 身份 + 令牌 + 目标节点上的 grant + 内核侧写入 uid | 正常发布通道。grant 在用户态校验后展开成内核 map 的 `(uid, dev, inode)` 授权；可消费 grant 的 uid 由 `tg-agent enroll --publisher-uids` 配置，默认 `0`（演示方便，生产必须改成发布端专用 uid）。fanotify 降级为检测+回滚，能力明显弱于 eBPF LSM。 |
-| 登记进程（`process`） | `exe_path`（可加 `uid`） | 策略例外，例如本机 rsync、备份程序。每一条都应被视为例外，管理端单独展示。当前 eBPF 后端尚未使用该规则：受保护路径上只有 grant 能放行，process 规则在 eBPF 节点上不生效（待补）。 |
+| 登记进程（`process`） | `exe_path`（可加 `uid`） | 策略例外，例如本机 rsync、备份程序。每一条都应被视为例外，管理端单独展示。规则的 `uid` 会与 agent 的 `--publisher-uids` 合并成“可消费 grant 的 uid 集合”，在每次策略同步时写进内核 map 并重建 grant 表，因此策略变更即时生效、无需重启 agent。 |
 | 其他进程 | 不匹配任何白名单 | 受保护路径上的一律拒绝。 |
 
 发布端与登记进程的区别在于：登记进程是长期规则，发布端是短时授权。发布端的长期身份只证明“它是发布端”，真正允许写哪条路径由令牌给出，令牌过期或吊销后立即失效。
@@ -400,7 +400,7 @@ BPF hook 拿到的是 dentry、inode、file、vma。执行器当前方向是按 
 | `tg_config` | 全局 enforce 开关（1=强制，0=只观察） | 当前 Go 侧固定写 1，未暴露熔断开关 |
 | `events` | ringbuf 拒绝/放行/观察事件 | 用户态消费后写审计链；消费失败不能阻断内核判定 |
 
-事件只承载判定结果与最小上下文（pid、comm、dev/inode、操作、verdict）。路径由用户态按 inode 索引回填；查不到时保留 `inode:<号>`。C 侧已预留 `MODE_OBSERVE` 与全局只观察模式，Go 侧尚未接线。
+事件只承载判定结果与最小上下文（pid、comm、dev/inode、操作、verdict）。路径由用户态按 inode 索引回填；查不到时保留 `inode:<号>`。C 侧 `MODE_OBSERVE` 与全局只观察模式均已接线：observe 规则进入内核 map 后只产生 `write.observed` 事件，不阻断。
 
 ### 5.7 失败与 fail-closed
 
@@ -702,7 +702,7 @@ sudo go test ./internal/enforcer -run NO_TESTS -bench . -benchtime=2000x
 | P0 骨架 | 三端工程结构、核心库、REST API、SQLite、mTLS enrollment、策略签发与同步、15 秒心跳、审计上报与验链、eBPF LSM 执行器（13 个 hook、inode 保护集合与授权 map、ringbuf）、observe 回退、用户态 e2e、`make build` | 核心库、控制面、两个 Agent、eBPF 执行器代码与 e2e 已落地；内核真实阻断已在 Linux 6.6 + bpf LSM 验证 | 同机 e2e + 内核验证：发布放行、webshell 写入被拒（需 bpf LSM 与 publisher uid 配置）、吊销后拒绝、审计验链 |
 | P1 内核主阻断完善 | mmap 父目录、link 源 inode、单文件规则 unlink/rename、observe 接线、SSE 推送与授权确认、新建子树的内核继承（d_instantiate）、性能基准均已完成；5.10 兼容待做 | 基本完成 | 5.10 与 6.6 至少各验证一次 |
 | P2 降级恢复 | fanotify 检测+回滚、基线、周期巡检、审批流、降级标红已完成；队列溢出处理与崩溃窗口恢复待补 | 基本完成 | `test/e2e/e2e-fanotify.sh` 通过 |
-| P3 容器与规模化 | overlayfs/容器场景已验证（`TestOverlayEnforcement`），部署形态齐备；多节点规模、审计保留与导出、自升级签名未做 | 部分完成 | 容器边界清单见第 9.2 节，不靠推断 |
+| P3 容器与规模化 | overlayfs/容器场景已验证（`TestOverlayEnforcement`），部署形态齐备，审计导出已实现；多节点规模、审计保留与归档、自升级签名未做 | 部分完成 | 容器边界清单见第 9.2 节，不靠推断 |
 | P4 RASP | 运行期应用层防护 | 未实现，范围未定 | 另行立项评估，本文不承诺任何应用层能力 |
 
 路线中的顺序不是强制的，但以下表述边界必须遵守：eBPF 执行器未在目标内核验证前，不能写“已实测拦截”；hook 矩阵未完整覆盖前，不能写“所有写入原语已覆盖”；P4 未实现前，不能出现“应用层防护”。

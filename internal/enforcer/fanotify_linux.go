@@ -214,7 +214,18 @@ func collectDirs(root string) ([]string, error) {
 	return dirs, err
 }
 
+// SetPublisherUIDs updates the uids allowed to consume grants (e.g. after a
+// policy change adds or removes a process writer rule).
+func (f *Fanotify) SetPublisherUIDs(uids []int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.publisherUIDs = uids
+	return nil
+}
+
 func (f *Fanotify) isPublisherUID(uid int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, u := range f.publisherUIDs {
 		if u == uid {
 			return true

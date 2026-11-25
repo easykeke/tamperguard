@@ -134,7 +134,8 @@ write and retries on `EPERM` while the token is valid.
 ### Audit
 | Method | Path | Query | Notes |
 |---|---|---|---|
-| GET | `/audit` | `node_id,kind,limit,before_seq` | Newest first |
+| GET | `/audit` | `node_id,kind,limit,before_seq,from,to` | Newest first; `from`/`to` are unix seconds |
+| GET | `/audit/export` | `node_id,kind,from,to,limit,format=jsonl\|csv` | Streaming evidence export; sets `Content-Disposition` |
 | GET | `/audit/state` | — | Per-agent `{next_seq,last_hash,alert}` — gap/fork detection |
 | GET | `/audit/verify` | `node_id` | Re-verifies stored chain, returns ok/first bad seq |
 
