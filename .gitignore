@@ -9,3 +9,9 @@ coverage.out
 go.sum.bak
 # Generated per-kernel: create with `make vmlinux` (needs bpftool).
 bpf/vmlinux.h
+
+# Windows test sandbox
+.test-win/*.exe
+.test-win/results.log
+.test-win/sandbox/
+
