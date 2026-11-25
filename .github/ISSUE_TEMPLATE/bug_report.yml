@@ -1,0 +1,43 @@
+name: Bug report
+description: 报告一个可复现的问题
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全漏洞请走 [SECURITY.md](../blob/main/SECURITY.md) 的私有渠道，不要用公开 issue。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 二进制版本或 commit hash
+    validations:
+      required: true
+  - type: input
+    id: kernel
+    attributes:
+      label: 内核与发行版
+      description: '`uname -a` 与 `cat /etc/os-release` 的关键行；执行层用 `tg-agent probe` 的输出'
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: 执行层
+      options: [ebpf-lsm, fanotify, observe, 不确定]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 命令、配置、期望结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: Agent / 服务端日志，注意脱敏
+    validations:
+      required: false

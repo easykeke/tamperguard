@@ -1,0 +1,32 @@
+name: Feature request
+description: 提出一个能力或改进建议
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 场景、现状、为什么现在的行为不够
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 如果涉及防护语义，请说明放行条件与审计方式
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及模块
+      options: [内核执行层, 降级执行层, RASP, 发布与令牌, 审计, 管理端, 部署, 文档]
+    validations:
+      required: true
+  - type: textarea
+    id: threat
+    attributes:
+      label: 安全影响（如涉及防护语义）
+      description: 新增能力是否会扩大放行面；攻击者能如何利用；失败时是否 fail-closed
+    validations:
+      required: false
