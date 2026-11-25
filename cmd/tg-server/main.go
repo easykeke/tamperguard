@@ -9,7 +9,10 @@ package main
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -90,35 +93,38 @@ func cmdInit(args []string) error {
 		return fmt.Errorf("%s already initialised (remove it to re-initialise)", *dataDir)
 	}
 
-	// CA (Ed25519).
-	caPub, caPriv, err := token.GenerateKey()
+	// CA and server certificate use ECDSA P-256: Ed25519 certificates are
+	// rejected by Windows Schannel and some other TLS stacks, which breaks the
+	// admin console for those clients. Signing keys (tokens, policy, releases)
+	// stay Ed25519.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
 	}
-	caCert, caDER, err := makeCA(caPub, caPriv)
+	caCert, caDER, err := makeCA(caKey)
 	if err != nil {
 		return err
 	}
 	if err := config.WriteCertPEM(filepath.Join(*dataDir, config.KeysDir, config.CACertFile), caDER); err != nil {
 		return err
 	}
-	if err := config.WriteEd25519Private(filepath.Join(*dataDir, config.KeysDir, config.CAKeyFile), caPriv); err != nil {
+	if err := config.WritePrivateKey(filepath.Join(*dataDir, config.KeysDir, config.CAKeyFile), caKey); err != nil {
 		return err
 	}
 
 	// Server TLS certificate signed by the CA.
-	serverPub, serverPriv, err := token.GenerateKey()
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
 	}
-	serverDER, err := makeServerCert(serverPub, caCert, caPriv)
+	serverDER, err := makeServerCert(&serverKey.PublicKey, caCert, caKey)
 	if err != nil {
 		return err
 	}
 	if err := config.WriteCertPEM(filepath.Join(*dataDir, config.KeysDir, config.ServerCertFile), serverDER); err != nil {
 		return err
 	}
-	if err := config.WriteEd25519Private(filepath.Join(*dataDir, config.KeysDir, config.ServerKeyFile), serverPriv); err != nil {
+	if err := config.WritePrivateKey(filepath.Join(*dataDir, config.KeysDir, config.ServerKeyFile), serverKey); err != nil {
 		return err
 	}
 
@@ -322,7 +328,7 @@ func genKeyFile(privPath, pubPath string) (ed25519.PrivateKey, error) {
 		pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o644)
 }
 
-func makeCA(pub ed25519.PublicKey, priv ed25519.PrivateKey) (*x509.Certificate, []byte, error) {
+func makeCA(caKey *ecdsa.PrivateKey) (*x509.Certificate, []byte, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 	if err != nil {
 		return nil, nil, err
@@ -337,7 +343,7 @@ func makeCA(pub ed25519.PublicKey, priv ed25519.PrivateKey) (*x509.Certificate, 
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &caKey.PublicKey, caKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -345,7 +351,7 @@ func makeCA(pub ed25519.PublicKey, priv ed25519.PrivateKey) (*x509.Certificate, 
 	return cert, der, err
 }
 
-func makeServerCert(pub ed25519.PublicKey, ca *x509.Certificate, caPriv ed25519.PrivateKey) ([]byte, error) {
+func makeServerCert(pub *ecdsa.PublicKey, ca *x509.Certificate, caKey crypto.Signer) ([]byte, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 	if err != nil {
 		return nil, err
@@ -353,16 +359,17 @@ func makeServerCert(pub ed25519.PublicKey, ca *x509.Certificate, caPriv ed25519.
 	host, _ := os.Hostname()
 	now := time.Now()
 	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "tg-server", Organization: []string{"TamperGuard"}},
-		NotBefore:    now.Add(-5 * time.Minute),
-		NotAfter:     now.AddDate(5, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost", host, "tg-server"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "tg-server", Organization: []string{"TamperGuard"}},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.AddDate(5, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost", host, "tg-server"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 	}
-	return x509.CreateCertificate(rand.Reader, tmpl, ca, pub, caPriv)
+	return x509.CreateCertificate(rand.Reader, tmpl, ca, pub, caKey)
 }
 
 func randomPassword(n int) string {

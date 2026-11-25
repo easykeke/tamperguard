@@ -10,6 +10,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
@@ -54,7 +55,7 @@ type Server struct {
 	releasePub  ed25519.PublicKey
 	releasePriv ed25519.PrivateKey
 	caCert      *x509.Certificate
-	caKey       ed25519.PrivateKey
+	caKey       crypto.Signer
 	sessionKey  []byte
 	tlsConf     *tls.Config
 
@@ -137,7 +138,7 @@ func (s *Server) retentionLoop() {
 	}
 }
 
-func loadCA(certPath, keyPath string) (*x509.Certificate, ed25519.PrivateKey, error) {
+func loadCA(certPath, keyPath string) (*x509.Certificate, crypto.Signer, error) {
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("server: read CA cert: %w", err)
@@ -150,7 +151,7 @@ func loadCA(certPath, keyPath string) (*x509.Certificate, ed25519.PrivateKey, er
 	if err != nil {
 		return nil, nil, fmt.Errorf("server: parse CA cert: %w", err)
 	}
-	key, err := config.ReadEd25519Private(keyPath)
+	key, err := config.ReadPrivateKey(keyPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("server: read CA key: %w", err)
 	}

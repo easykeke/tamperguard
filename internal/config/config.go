@@ -6,6 +6,7 @@
 package config
 
 import (
+	"crypto"
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/base64"
@@ -208,6 +209,37 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(name, path)
+}
+
+// WritePrivateKey stores any PKCS#8 private key (0600).
+func WritePrivateKey(path string, key any) error {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return err
+	}
+	return WriteFileAtomic(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600)
+}
+
+// ReadPrivateKey loads a PKCS#8 private key as a crypto.Signer, accepting both
+// Ed25519 (signing keys) and ECDSA (TLS keys).
+func ReadPrivateKey(path string) (crypto.Signer, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, fmt.Errorf("config: %s is not PEM", path)
+	}
+	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	signer, ok := k.(crypto.Signer)
+	if !ok {
+		return nil, fmt.Errorf("config: %s is not a signing key", path)
+	}
+	return signer, nil
 }
 
 // WriteEd25519Private stores an Ed25519 private key as PKCS#8 PEM (0600).

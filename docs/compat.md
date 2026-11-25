@@ -1,5 +1,9 @@
 # 兼容性与能力探测
 
+## 0. TLS 证书
+
+控制面与 Agent 之间的 TLS 使用 **ECDSA P-256** 的 CA 与服务端证书；令牌、策略、发布清单等签名仍用 **Ed25519**。早期版本使用 Ed25519 证书，Windows Schannel（curl/PowerShell）和部分客户端会直接拒绝握手（`ERR_SSL_VERSION_OR_CIPHER_MISMATCH`），因此改为 ECDSA。自签名证书在浏览器里会提示不受信任，内网部署可把 CA 导入受信任根，或前面加一层正式证书的反向代理。
+
 ## 1. 如何自查
 
 ```bash

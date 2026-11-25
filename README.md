@@ -37,6 +37,14 @@ TamperGuard 是面向 Linux 主机的网页目录防篡改系统：内核层同�
                     └──────────────────────────────────────┘
 ```
 
+## 管理端界面
+
+登录后是六个页面（总览 / 节点 / 策略 / 发布 / 审计 / 吊销），零依赖原生页面，随二进制内嵌，不需要 Node 构建链。
+
+![总览](docs/screenshots/ui-overview.png)
+
+![策略](docs/screenshots/ui-policies.png)
+
 ## 快速开始（5 分钟）
 
 环境：Linux 或 WSL2 Ubuntu 24.04，root，内核带 bpf LSM（`cat /sys/kernel/security/lsm` 含 `bpf`）。完整步骤、策略创建、发布与吊销验证见 [docs/quickstart.md](docs/quickstart.md)。
