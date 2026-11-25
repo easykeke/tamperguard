@@ -22,6 +22,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/agent"
 	"github.com/easykeke/tamperguard/internal/config"
 	"github.com/easykeke/tamperguard/internal/enforcer"
+	"github.com/easykeke/tamperguard/internal/landlock"
 )
 
 func main() {
@@ -37,6 +38,8 @@ func main() {
 		err = cmdRun(os.Args[2:])
 	case "probe":
 		err = cmdProbe(os.Args[2:])
+	case "landlock":
+		err = cmdLandlock(os.Args[2:])
 	case "unlock":
 		err = cmdUnlock(os.Args[2:])
 	case "help", "-h", "--help":
@@ -59,6 +62,7 @@ func usage() {
   tg-agent enroll --server URL --bootstrap TOKEN --ca FILE [--role protect] [--state-dir DIR]
   tg-agent run    [--state-dir DIR] [--enforcer auto|ebpf|fanotify|windows-acl|observe]
   tg-agent probe  [--state-dir DIR]
+  tg-agent landlock [--allow-write DIRS] [--check] -- CMD [ARGS...]
   tg-agent unlock [--state-dir DIR]   (Windows: restore inherited permissions)
 `)
 }
@@ -93,6 +97,53 @@ func cmdEnroll(args []string) error {
 		return err
 	}
 	fmt.Printf("enrolled as %s (role %s)\nstate written to %s\n", state.AgentID, state.Role, *stateDir)
+	return nil
+}
+
+// cmdLandlock confines the given command with Landlock and execs it. This is
+// the process self-protection layer: the web server runs inside a domain where
+// the document root is read-only, so an RCE cannot rewrite content even though
+// the file permissions would allow it.
+func cmdLandlock(args []string) error {
+	fs := flag.NewFlagSet("landlock", flag.ExitOnError)
+	allow := fs.String("allow-write", "", "comma-separated directories the confined process may write")
+	noDefaults := fs.Bool("no-defaults", false, "do not implicitly allow /tmp, /var/tmp and /dev/shm")
+	check := fs.Bool("check", false, "print the Landlock ABI and exit")
+	_ = fs.Parse(args)
+
+	if *check {
+		abi, err := landlock.ABI()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("landlock ABI: %d\n", abi)
+		return nil
+	}
+	var dirs []string
+	if !*noDefaults {
+		for _, d := range []string{"/tmp", "/var/tmp", "/dev/shm"} {
+			if st, err := os.Stat(d); err == nil && st.IsDir() {
+				dirs = append(dirs, d)
+			}
+		}
+		// Device files are commonly opened for writing by shells, runtimes and
+		// logging libraries; allow the harmless ones explicitly instead of the
+		// whole /dev tree (which contains block devices).
+		for _, f := range []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty"} {
+			if _, err := os.Stat(f); err == nil {
+				dirs = append(dirs, f)
+			}
+		}
+	}
+	dirs = append(dirs, parseStringList(*allow)...)
+	command := fs.Args()
+	if len(command) == 0 {
+		return errors.New("landlock: no command given (usage: tg-agent landlock [flags] -- command args...)")
+	}
+	cfg := landlock.Config{WritableDirs: dirs}
+	if err := landlock.Exec(cfg, command, os.Environ()); err != nil {
+		return fmt.Errorf("landlock: %w", err)
+	}
 	return nil
 }
 

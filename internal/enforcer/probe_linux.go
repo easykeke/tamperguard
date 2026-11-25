@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/easykeke/tamperguard/internal/landlock"
 )
 
 // ensureSecurityFS mounts securityfs when it is not already mounted, so the
@@ -37,6 +39,9 @@ func Probe(stateDir string) ProbeReport {
 	}
 	if raw, err := os.ReadFile("/sys/kernel/security/lsm"); err == nil {
 		rep.LSMActive = strings.TrimSpace(string(raw))
+	}
+	if abi, err := landlock.ABI(); err == nil {
+		rep.LandlockABI = abi
 	}
 	rep.LSMHasBPF = false
 	for _, part := range strings.Split(rep.LSMActive, ",") {

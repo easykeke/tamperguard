@@ -15,6 +15,7 @@ type ProbeReport struct {
 	HasBTF        bool   `json:"has_btf"`
 	BPFLoadError  string `json:"bpf_load_error,omitempty"`
 	FanotifyError string `json:"fanotify_error,omitempty"`
+	LandlockABI   int    `json:"landlock_abi,omitempty"`
 	Selected      string `json:"selected"`
 	Degraded      bool   `json:"degraded"`
 }
@@ -36,6 +37,11 @@ func FormatProbe(r ProbeReport) string {
 	}
 	if osName == "linux" {
 		fmt.Fprintf(&b, "kernel BTF    : %v\n", r.HasBTF)
+		if r.LandlockABI > 0 {
+			fmt.Fprintf(&b, "landlock      : ABI v%d (process self-protection available)\n", r.LandlockABI)
+		} else {
+			fmt.Fprintf(&b, "landlock      : unavailable (process self-protection disabled)\n")
+		}
 	}
 	if r.BPFLoadError != "" {
 		fmt.Fprintf(&b, "strongest     : unavailable: %s\n", r.BPFLoadError)

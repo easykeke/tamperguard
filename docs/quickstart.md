@@ -497,7 +497,24 @@ sudo ./bin/tg-agent probe --state-dir /var/lib/tamperguard-agent
 
 输出会说明内核版本、LSM 列表、BTF 是否可用、eBPF 与 fanotify 是否可加载，以及最终选择的执行层。5.10–6.2 与无 bpf LSM 的内核会自动降级，矩阵见 `docs/compat.md`。
 
-## 15. 常见问题
+## 15. 验证 F：进程自保护（Landlock）
+
+除了系统级阻断，还可以把 Web 进程本身关进只读沙箱——即使它被 RCE，也写不了站点目录：
+
+```bash
+# systemd 里把 ExecStart 换成这条；Node / Java / PHP-FPM 同理
+sudo ./bin/tg-agent landlock --allow-write /var/lib/php/sessions --allow-write /var/log/php \
+  -- /usr/sbin/php-fpm --nodaemonize
+```
+
+不显式允许的路径一律只读（写入/删除/重命名返回 `EACCES`），且约束**不可撤销**、子进程继承。默认放行 `/tmp`、`/var/tmp`、`/dev/shm` 与 `/dev/null` 等设备文件，避免破坏正常运行时。
+
+```bash
+sudo ./bin/tg-agent landlock --check        # 查看内核 Landlock ABI
+sudo bash test/e2e/e2e-landlock.sh          # 端到端验证
+```
+
+## 16. 常见问题
 
 ### 11.1 内核没有 bpf LSM，只能 observe
 
@@ -559,7 +576,7 @@ curl -sS --cacert "$CA" -b /tmp/tg.cookies "$BASE/api/v1/audit/verify?node_id=$P
 
 P0 的 `tg-publish` 直接写本机的 `target_dir`，不实现内容传输。发布端与节点分机时，需要部署侧用 rsync/SSH/共享存储把文件送到目标节点并保证写入经由目标节点的执行层，当前没有现成实现。quickstart 的端到端流程只适用于同机。
 
-## 16. 数据目录与文件
+## 17. 数据目录与文件
 
 | 路径 | 内容 |
 |---|---|

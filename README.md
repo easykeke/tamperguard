@@ -12,6 +12,7 @@ TamperGuard 是面向 Linux 主机的网页目录防篡改系统：内核层同�
 | 链式审计 | 每条记录带单调 seq、prev hash、自身 hash 与 Ed25519 签名；服务端按 Agent 追踪 `(next_seq, last_hash)`，出现缺口或分叉立即告警。 | 链式哈希只能发现修改；防删除靠 seq 与服务端缺口检测；拿到 Agent 私钥的 root 可伪造。 |
 | 内核同步阻断 | eBPF LSM 在 open/write/create/unlink/rename/setattr/mmap 等原语进入前拒绝未授权写入，不是事后扫描。内核不支持或加载失败时回退 observe（不阻断，也不会自动记录真实写入），并标记 degraded。 | 不覆盖网络文件系统保证、容器 OverlayFS（P3 验证）、已打开 fd 之外的任意 root 行为；P0 的 fanotify 降级尚未实现（P2）。 |
 | 跨平台执行层 | Windows 没有 eBPF/fanotify 对应物：用 NTFS ACL 锁定（SYSTEM/Administrators 全权、Everyone 只读），发布窗口给发布账号临时加写权限，到期或吊销即收回；执行层由平台自动选择，`tg-agent probe` 可查看结果。 | 挡不住管理员；拿不到每次写事件；第三方安全软件重置 ACL 后需要重新应用。先进路线（minifilter 驱动、完整性级别）见 [先进技术调研](docs/advanced-techniques.md)。 |
+| 进程自保护 | `tg-agent landlock [--allow-write DIR] -- <web 进程>`：把 Web 服务放进只读沙箱，站点目录的写入/删除/重命名由内核直接拒绝（EACCES），即使该进程被 RCE 也改不了内容；不需要 root，也不需要 eBPF。 | 只能约束自身及其子进程；约束前已打开的 fd 不受限；被约束进程如果自己再 exec 也无法解除（设计如此）。 |
 
 ## 架构
 
@@ -68,6 +69,9 @@ sudo ./bin/tg-agent run --state-dir /var/lib/tamperguard-agent
 没有 bpf LSM 时执行器回退 observe：写入不会被拒绝，真实写入也不会自动进审计。用户态全链路可以先跑 `sudo bash test/e2e/e2e-sim.sh`；内核带 bpf LSM 的机器跑 `sudo bash test/e2e/e2e-ebpf.sh` 验证真实阻断。
 
 ## 当前状态（P0）
+
+> 执行层按平台与能力自动选择：Linux 为 eBPF LSM（同步阻断）→ fanotify（检测+回滚）→ observe，另可用 Landlock 给 Web 进程加“自缚”沙箱；Windows 为 ACL 锁定（实验性）。完整能力清单与验证矩阵见 [CHANGELOG](CHANGELOG.md) 与 [兼容性矩阵](docs/compat.md)。
+
 
 | 状态 | 内容 |
 |---|---|

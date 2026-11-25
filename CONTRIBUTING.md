@@ -18,6 +18,7 @@ make e2e-upgrade    # 签名自升级
 make e2e-rasp       # Node.js 探针
 make e2e-rasp-java  # Java 探针
 make e2e-pull       # 跨机发布
+make e2e-landlock   # Landlock 进程自保护（需要内核启用 Landlock）
 make bpf            # 重新生成 eBPF Go 绑定（需要 clang/bpftool）
 make rasp-java      # 构建 Java 探针 jar
 ```
