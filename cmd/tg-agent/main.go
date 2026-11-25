@@ -248,7 +248,8 @@ func cmdRun(args []string) error {
 	upgradeInterval := fs.Duration("upgrade-interval", 6*time.Hour, "how often to check for updates")
 	raspEnabled := fs.Bool("rasp", true, "serve the application-layer probe socket")
 	raspSocket := fs.String("rasp-socket", "", "override the probe socket path")
-	integrity := fs.Bool("integrity", true, "Windows: also label protected paths High (NO_WRITE_UP), needs SeSecurityPrivilege")
+	integrity := fs.Bool("integrity", true, "Windows: label protected paths System (NO_WRITE_UP) so even elevated administrators cannot write; needs SeSecurityPrivilege")
+	allowAdmins := fs.Bool("windows-allow-admins", false, "Windows: keep write access for the Administrators group (weakens protection; strict by default)")
 	verity := fs.Bool("verity", false, "enable fs-verity on files installed by pull deliveries (read-only + verified reads)")
 	_ = fs.Parse(args)
 
@@ -264,6 +265,7 @@ func cmdRun(args []string) error {
 		PublisherSIDs:  state.PublisherSIDs,
 		StateDir:       *stateDir,
 		IntegrityLevel: *integrity,
+		AllowAdmins:    *allowAdmins,
 	})
 	if err != nil {
 		return err

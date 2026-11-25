@@ -44,8 +44,9 @@ type WindowsACL struct {
 	sids   []*windows.SID
 	events *Buffer
 
-	mic    bool
-	micErr error
+	mic         bool
+	micErr      error
+	allowAdmins bool
 
 	mu      sync.Mutex
 	rt      Runtime
@@ -55,21 +56,38 @@ type WindowsACL struct {
 	once    sync.Once
 }
 
-// NewWindowsACL builds the backend. publisherSIDs may be SIDs ("S-1-5-...") or
-// local/domain account names; they are resolved immediately.
-func NewWindowsACL(publisherSIDs []string, stateDir string, integrity bool) (*WindowsACL, error) {
+// WindowsACLConfig configures the backend.
+type WindowsACLConfig struct {
+	// PublisherSIDs are the accounts allowed to write during a release window.
+	PublisherSIDs []string
+	// StateDir stores the list of locked paths for `tg-agent unlock`.
+	StateDir string
+	// Integrity enables the MIC layer: protected paths are labelled System with
+	// NO_WRITE_UP, so even an elevated administrator cannot write them; the
+	// label drops to Medium only while a release grant is live.
+	Integrity bool
+	// AllowAdmins keeps an explicit "Administrators: full control" ACE. It is
+	// off by default: tamper protection is pointless if any admin process can
+	// simply write the file. Turn it on only for appliances whose operations
+	// tooling runs as an administrator and cannot be moved to a service account.
+	AllowAdmins bool
+}
+
+// NewWindowsACL builds the backend.
+func NewWindowsACL(cfg WindowsACLConfig) (*WindowsACL, error) {
 	token := windows.GetCurrentProcessToken()
 	if !token.IsElevated() {
 		return nil, errors.New("windows-acl: the agent must run elevated (Administrator or SYSTEM)")
 	}
 	w := &WindowsACL{
-		log:     slog.Default(),
-		state:   stateDir,
-		events:  NewBuffer(128),
-		applied: map[string]string{},
-		stop:    make(chan struct{}),
+		log:         slog.Default(),
+		state:       cfg.StateDir,
+		events:      NewBuffer(128),
+		allowAdmins: cfg.AllowAdmins,
+		applied:     map[string]string{},
+		stop:        make(chan struct{}),
 	}
-	if integrity {
+	if cfg.Integrity {
 		if err := enablePrivilege("SeSecurityPrivilege"); err != nil {
 			w.micErr = err
 			w.log.Warn("windows-acl: MIC disabled (cannot enable SeSecurityPrivilege)", "err", err)
@@ -77,7 +95,7 @@ func NewWindowsACL(publisherSIDs []string, stateDir string, integrity bool) (*Wi
 			w.mic = true
 		}
 	}
-	for _, raw := range publisherSIDs {
+	for _, raw := range cfg.PublisherSIDs {
 		sid, err := resolveSID(raw)
 		if err != nil {
 			w.log.Warn("windows-acl: cannot resolve publisher account", "account", raw, "err", err)
@@ -94,10 +112,16 @@ func (w *WindowsACL) Name() string { return "windows-acl" }
 
 // Capability implements Enforcer.
 func (w *WindowsACL) Capability() Capability {
-	reason := "ACL lockdown: blocks at open for non-administrators; existing handles and administrators bypass; no per-write audit"
-	if w.mic {
-		reason += "; MIC: protected paths are labelled High with NO_WRITE_UP, so Medium-integrity processes (IIS app pools, PHP) cannot write even if their DACL allows it"
+	reason := "ACL lockdown: only SYSTEM (and configured publisher accounts during a release window) may write; administrators are not granted write access"
+	if !w.allowAdmins {
+		reason += " (strict mode; owners can still take ownership and rewrite the DACL)"
+	} else {
+		reason += " (administrators explicitly allowed)"
 	}
+	if w.mic {
+		reason += "; MIC: protected paths are labelled System with NO_WRITE_UP, so High-integrity (elevated administrator) processes are denied writes as well"
+	}
+	reason += "; a determined administrator can still stop the agent or retake ownership, which is why audit evidence exists"
 	return Capability{
 		Kind:      "windows-acl",
 		Available: true,
@@ -143,12 +167,14 @@ func (w *WindowsACL) Update(rt Runtime) error {
 			continue
 		}
 		if w.mic {
-			// While a grant is live the label drops to Medium so the authorised
-			// publisher account (normally a medium-integrity service account)
-			// can write through the DACL grant; otherwise the tree is High and
-			// no medium-integrity process can touch it.
-			high := !w.grantCovers(rt, norm, now)
-			if err := setIntegrityLevel(native, high, info.IsDir()); err != nil {
+			// System integrity while idle: an elevated administrator runs at High
+			// and is therefore denied writes. During a live grant the label drops
+			// to Medium so the publisher service account can write through DACL.
+			level := levelSystem
+			if w.grantCovers(rt, norm, now) {
+				level = levelMedium
+			}
+			if err := setIntegrity(native, level, info.IsDir()); err != nil {
 				micErrs = append(micErrs, fmt.Sprintf("%s (MIC): %v", native, err))
 			}
 		}
@@ -186,8 +212,13 @@ func (w *WindowsACL) buildEntries(rt Runtime, normPath string, isDir bool, now i
 	}
 	entries := []windows.EXPLICIT_ACCESS{
 		makeEntry(windows.GENERIC_ALL, inherit, mustWellKnown(windows.WinLocalSystemSid)),
-		makeEntry(windows.GENERIC_ALL, inherit, mustWellKnown(windows.WinBuiltinAdministratorsSid)),
 		makeEntry(windows.GENERIC_READ|windows.GENERIC_EXECUTE, inherit, mustWellKnown(windows.WinWorldSid)),
+	}
+	if w.allowAdmins {
+		// Compatibility mode: administrators keep write access (and can undo the
+		// lockdown trivially), which is why it is opt-in only.
+		entries = append(entries, makeEntry(windows.GENERIC_ALL, inherit,
+			mustWellKnown(windows.WinBuiltinAdministratorsSid)))
 	}
 	if w.grantCovers(rt, normPath, now) {
 		for _, sid := range w.sids {
@@ -213,6 +244,10 @@ func (w *WindowsACL) grantCovers(rt Runtime, normPath string, now int64) bool {
 func normalizeOnWindows(p string) (string, bool) { return token.NormalizePath(p) }
 
 func pathCoveredNorm(base, target string) bool { return token.PathCovered(base, target) }
+
+// normFromNative converts a native Windows path back to the slash spelling used
+// by the shared model.
+func normFromNative(p string) string { return strings.ReplaceAll(p, `\`, "/") }
 
 func makeEntry(mask windows.ACCESS_MASK, inherit uint32, sid *windows.SID) windows.EXPLICIT_ACCESS {
 	return windows.EXPLICIT_ACCESS{
@@ -314,7 +349,7 @@ func (w *WindowsACL) unlock() error {
 		if w.mic {
 			// Back to Medium so the operator's normal tooling can rewrite the
 			// tree again after the agent is retired.
-			if micErr := setIntegrityLevel(native, false, true); micErr != nil {
+			if micErr := setIntegrity(native, levelMedium, true); micErr != nil {
 				errs = append(errs, fmt.Sprintf("%s (MIC reset): %v", native, micErr))
 			}
 		}
@@ -422,12 +457,16 @@ func (w *WindowsACL) Health() error {
 			return fmt.Errorf("windows-acl: %s has an empty DACL", native)
 		}
 		if w.mic {
-			level, err := integrityLabel(native)
+			level, err := integrityOf(native)
 			if err != nil {
 				return err
 			}
-			if level == 0 {
-				return fmt.Errorf("windows-acl: %s has no integrity label", native)
+			expected := levelSystem
+			if w.grantCovers(w.rt, normFromNative(native), time.Now().Unix()) {
+				expected = levelMedium
+			}
+			if level != expected {
+				return fmt.Errorf("windows-acl: %s has integrity level %d, expected %d", native, level, expected)
 			}
 		}
 	}

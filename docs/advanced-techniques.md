@@ -42,7 +42,9 @@ Windows 的 Mandatory Integrity Control 在 DACL 检查**之前**生效：每个
 - 需要管理员改 SACL 才能解除（管理员作弊仍在威胁模型之外）。
 - 局限：IIS 应用池若以 SYSTEM 身份运行，其进程完整性是 System，会绕过高完整性标签；必须先把应用池降到专用账户/Medium IL，这与安全基线本来一致。
 
-**建议**：作为 Windows ACL 后端的增强项实现——ACL 管"谁能写"，MIC 管"什么完整性级别的进程能写"。两者组合后，非管理员攻击面基本关闭。
+**建议**：作为 Windows ACL 后端的增强项实现——ACL 管"谁能写"，MIC 管"什么完整性级别的进程能写"。
+
+**本产品默认组合**：DACL 不授予 Administrators 写 + 标签 **System**（`NO_WRITE_UP`）。提权管理员是 High 完整性，因此普通写入被内核拒绝；发布窗口内临时降为 Medium 放行授权账号。管理员仍可通过取得所有权/改 SACL/停 Agent 绕过（普通写入不再是绕过方式）。
 
 来源：[Mandatory Integrity Control（Microsoft Learn）](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)
 

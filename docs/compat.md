@@ -69,12 +69,12 @@ Windows 没有 eBPF LSM，也没有 fanotify 等价物；用户态可用的同�
 |---|---|
 | 权限 | Agent 必须以管理员或 SYSTEM 运行（否则 `windows-acl` 不可用，自动降级 observe 并上报 degraded） |
 | 文件系统 | NTFS（ACL 与继承语义依赖）；ReFS 未验证 |
-| 保护方式 | 对策略中的 enforce 路径设置显式 DACL：SYSTEM/Administrators 完全控制，Everyone 只读+执行；子对象继承 |
+| 保护方式 | 显式 DACL：SYSTEM 完全控制、Everyone 只读+执行；**默认不授予 Administrators 写权限**（`--windows-allow-admins` 可恢复兼容模式），子对象继承 |
 | 发布窗口 | 令牌有效期内给 `--publisher-sids` 配置的账号追加写+删除 ACE，到期/吊销后重新应用 DACL 收回 |
-| 阻断边界 | 阻断非管理员进程的写入/删除/重命名；管理员（含以 SYSTEM 运行的 IIS 应用池）不受限 |
+| 阻断边界 | 默认阻断所有 System 完整性以下进程的写入/删除/重命名，**包括提权管理员**；管理员仅能通过取得所有权/重写 ACL/改 SACL/停 Agent 绕过（心跳会重新施加，窗口默认约 15 s）；以 SYSTEM 运行的进程（如 SYSTEM 应用池、备份服务）不受限 |
 | 审计 | 无内核事件：只有策略应用/错误与 RASP 事件进审计链，**不产生每次写操作记录** |
 | 卸载/回滚 | `tg-agent unlock --state-dir ...` 恢复继承权限；Agent 退出或崩溃**不会**自动解锁（防止防护静默消失） |
-| 完整性级别（MIC，默认开启） | 受保护路径在 DACL 之外再打 High + `NO_WRITE_UP` 完整性标签（继承子对象）；Medium 完整性进程（IIS 应用池、PHP、普通用户进程）即使 DACL 允许也写不进去；发布窗口内临时降为 Medium，让授权账号通过 DACL 授予写入 | 需要 `SeSecurityPrivilege`（管理员/SYSTEM 运行时可自动启用）；`--integrity=false` 关闭 |
+| 完整性级别（MIC，默认开启） | 受保护路径再打 **System** + `NO_WRITE_UP` 完整性标签（继承子对象）：System 完整性以下的进程（含**提权管理员**，其令牌是 High）即使 DACL 允许也写不进去；发布窗口内临时降为 Medium，让授权发布账号通过 DACL 授予写入 | 需要 `SeSecurityPrivilege`（管理员/SYSTEM 运行时可自动启用）；`--integrity=false` 关闭 |
 
 实测限制与后续路线：
 

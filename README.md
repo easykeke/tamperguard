@@ -2,7 +2,7 @@
 
 TamperGuard 是面向 Linux 主机的网页目录防篡改系统：内核层同步拒绝未授权写入，发布写入由内容哈希绑定的短时效令牌授权，所有写入行为进入可校验的链式审计。
 
-先把边界写明：不防 root（Windows 上是不防管理员）；覆盖策略列出的路径；Linux 用 eBPF LSM 同步阻断（不可用时降级 fanotify 检测+回滚），Windows 用 NTFS ACL 锁定（无驱动，标记 degraded）；RASP 覆盖 Node.js 与 Java；发布支持本机与跨机（pull）两种形态。拿到 root/管理员权限的攻击者可以停执行层、改策略、删审计，本产品只能留下事后可检测的痕迹，不做“全面防护”。
+先把边界写明：不防 root/管理员的**主动对抗**（但普通的管理员写入默认也会被拒，Linux 与 Windows 都是如此）；覆盖策略列出的路径；Linux 用 eBPF LSM 同步阻断（不可用时降级 fanotify 检测+回滚），Windows 用 NTFS ACL 锁定（无驱动，标记 degraded）；RASP 覆盖 Node.js 与 Java；发布支持本机与跨机（pull）两种形态。拿到 root/管理员权限的攻击者可以停执行层、改策略、删审计，本产品只能留下事后可检测的痕迹，不做“全面防护”。
 
 ## 核心设计
 
@@ -11,7 +11,7 @@ TamperGuard 是面向 Linux 主机的网页目录防篡改系统：内核层同�
 | 内容哈希绑定令牌 | 令牌绑定发布端身份、目标节点、路径范围与 release manifest 的 SHA-256 摘要，TTL ≤15 分钟，可吊销。令牌只证明“谁可以写”，manifest 摘要才证明“写的是批准的内容”。 | 不判断发布内容是否安全；发布端在提交 manifest 前被控制时，摘要绑定无法阻止恶意内容。 |
 | 链式审计 | 每条记录带单调 seq、prev hash、自身 hash 与 Ed25519 签名；服务端按 Agent 追踪 `(next_seq, last_hash)`，出现缺口或分叉立即告警。 | 链式哈希只能发现修改；防删除靠 seq 与服务端缺口检测；拿到 Agent 私钥的 root 可伪造。 |
 | 内核同步阻断 | eBPF LSM 在 open/write/create/unlink/rename/setattr/mmap 等原语进入前拒绝未授权写入，不是事后扫描。内核不支持或加载失败时回退 observe（不阻断，也不会自动记录真实写入），并标记 degraded。 | 不覆盖网络文件系统保证、容器 OverlayFS（P3 验证）、已打开 fd 之外的任意 root 行为；P0 的 fanotify 降级尚未实现（P2）。 |
-| 跨平台执行层 | Windows 没有 eBPF/fanotify 对应物：用 NTFS ACL 锁定（SYSTEM/Administrators 全权、Everyone 只读）叠加 High 完整性标签（`NO_WRITE_UP`，Medium 进程即使 DACL 允许也写不进去），发布窗口给发布账号临时加写权限并把标签降为 Medium，到期或吊销即收回；执行层由平台自动选择，`tg-agent probe` 可查看结果。 | 挡不住管理员；拿不到每次写事件；第三方安全软件重置 ACL 后需要重新应用。先进路线（minifilter 驱动、完整性级别）见 [先进技术调研](docs/advanced-techniques.md)。 |
+| 跨平台执行层 | Windows 没有 eBPF/fanotify 对应物：默认严格模式：DACL 只给 SYSTEM 完全控制、Everyone 只读（**不授予 Administrators 写权限**），再叠加 **System + `NO_WRITE_UP`** 完整性标签——提权管理员（High 完整性）的普通写入也会被内核拒绝；只有发布窗口内临时降为 Medium 的路径才允许 `--publisher-sids` 账号通过 DACL 写入。执行层由平台自动选择，`tg-agent probe` 可查看结果。 | 挡不住管理员；拿不到每次写事件；第三方安全软件重置 ACL 后需要重新应用。先进路线（minifilter 驱动、完整性级别）见 [先进技术调研](docs/advanced-techniques.md)。 |
 | 进程自保护 | `tg-agent landlock [--allow-write DIR] -- <web 进程>`：把 Web 服务放进只读沙箱，站点目录的写入/删除/重命名由内核直接拒绝（EACCES），即使该进程被 RCE 也改不了内容；不需要 root，也不需要 eBPF。 | 只能约束自身及其子进程；约束前已打开的 fd 不受限；被约束进程如果自己再 exec 也无法解除（设计如此）。 |
 | 发布固化 | `--verity`：发布安装完成后对文件启用 fs-verity，文件变为内核级只读（写入 `EPERM`），读取按 Merkle 树校验（含 mmap），可对抗磁盘/固件级篡改。 | 需要内核 `CONFIG_FS_VERITY` 与文件系统 `verity` 特性；本机内核未启用，运行时验证待补。 |
 

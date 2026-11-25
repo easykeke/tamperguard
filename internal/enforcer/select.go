@@ -14,8 +14,12 @@ type Options struct {
 	// StateDir is where the degraded backends keep their baseline copies.
 	StateDir string
 	// IntegrityLevel enables the Windows MIC hardening layer (label protected
-	// paths High with NO_WRITE_UP in addition to the ACL lockdown).
+	// paths System with NO_WRITE_UP in addition to the ACL lockdown).
 	IntegrityLevel bool
+	// AllowAdmins keeps write access for the Administrators group on Windows.
+	// Off by default: tamper protection that administrators can bypass with a
+	// plain file copy is not protection.
+	AllowAdmins bool
 }
 
 // Select returns the strongest enforcement backend available in this build.

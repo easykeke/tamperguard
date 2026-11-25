@@ -11,15 +11,18 @@ import (
 
 // Mandatory Integrity Control (MIC) support.
 //
-// The ACL backend answers "who may write". MIC answers "what integrity level
-// may write": an object labelled High with SYSTEM_MANDATORY_LABEL_NO_WRITE_UP
-// cannot be modified by a Medium-integrity process even when its DACL grants
-// write access. That makes the protection survive a misconfigured or maliciously
-// widened DACL, which is exactly the gap the ACL backend has on Windows.
+// Access is decided in two steps on Windows: the DACL answers "who may write",
+// MIC answers "what integrity level may write". For tamper protection the
+// interesting combination is a System-integrity label with NO_WRITE_UP: an
+// administrator elevated to High integrity cannot modify the object even though
+// its token holds every privilege the DACL would need. Only System-integrity
+// processes (services such as the agent itself) can write, and during a release
+// window the label is lowered to Medium so the authorised publisher account can
+// write through the DACL grant.
 //
 // Writing a SACL needs SeSecurityPrivilege, so the agent must run elevated; the
-// label is written with inheritance so new files under a protected directory
-// are covered as well.
+// label is written with inheritance so new files under a protected directory are
+// covered as well.
 
 var (
 	advapi32DLL         = windows.NewLazySystemDLL("advapi32.dll")
@@ -31,6 +34,17 @@ const (
 	aclRevision                 = 2
 	mandatoryLabelNoWriteUp     = 0x00000001
 	systemMandatoryLabelAceType = 0x11
+)
+
+// integrityLevel is the subset of Windows integrity labels this package uses.
+type integrityLevel int
+
+const (
+	levelUnknown integrityLevel = 0
+	levelLow     integrityLevel = 1
+	levelMedium  integrityLevel = 2
+	levelHigh    integrityLevel = 3
+	levelSystem  integrityLevel = 4
 )
 
 // enablePrivilege enables a privilege in the current process token.
@@ -57,13 +71,28 @@ func enablePrivilege(name string) error {
 	return windows.AdjustTokenPrivileges(token, false, &state, 0, nil, nil)
 }
 
-// setIntegrityLevel writes a mandatory label ACE into the object's SACL.
-// high=true labels the object High with NO_WRITE_UP; high=false resets it to
-// Medium (the normal state for user content).
-func setIntegrityLevel(path string, high, inherit bool) error {
-	kind := windows.WELL_KNOWN_SID_TYPE(windows.WinMediumLabelSid)
-	if high {
-		kind = windows.WELL_KNOWN_SID_TYPE(windows.WinHighLabelSid)
+func sidForLevel(level integrityLevel) (windows.WELL_KNOWN_SID_TYPE, bool) {
+	switch level {
+	case levelLow:
+		return windows.WELL_KNOWN_SID_TYPE(windows.WinLowLabelSid), true
+	case levelMedium:
+		return windows.WELL_KNOWN_SID_TYPE(windows.WinMediumLabelSid), true
+	case levelHigh:
+		return windows.WELL_KNOWN_SID_TYPE(windows.WinHighLabelSid), true
+	case levelSystem:
+		return windows.WELL_KNOWN_SID_TYPE(windows.WinSystemLabelSid), true
+	default:
+		return 0, false
+	}
+}
+
+// setIntegrity writes a mandatory label ACE into the object's SACL, with
+// NO_WRITE_UP so lower-integrity processes cannot write even with a permissive
+// DACL.
+func setIntegrity(path string, level integrityLevel, inherit bool) error {
+	kind, ok := sidForLevel(level)
+	if !ok {
+		return fmt.Errorf("windows-acl: unknown integrity level %d", level)
 	}
 	sid, err := windows.CreateWellKnownSid(kind)
 	if err != nil {
@@ -91,19 +120,19 @@ func setIntegrityLevel(path string, high, inherit bool) error {
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, info, nil, nil, nil, acl)
 }
 
-// integrityLabel returns the last sub-authority of the mandatory label SID:
-// 8192 = Medium, 12288 = High, 0 when the object has no label.
-func integrityLabel(path string) (uint32, error) {
+// integrityOf reads the current label. It returns levelUnknown when the object
+// has no mandatory label.
+func integrityOf(path string) (integrityLevel, error) {
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.SACL_SECURITY_INFORMATION)
 	if err != nil {
-		return 0, err
+		return levelUnknown, err
 	}
 	sacl, _, err := sd.SACL()
 	if err != nil {
-		return 0, err
+		return levelUnknown, err
 	}
 	if sacl == nil || sacl.AceCount == 0 {
-		return 0, nil
+		return levelUnknown, nil
 	}
 	for i := 0; i < int(sacl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
@@ -117,10 +146,21 @@ func integrityLabel(path string) (uint32, error) {
 		raw := unsafe.Slice((*byte)(unsafe.Pointer(&ace.SidStart)), 32)
 		count := int(raw[1])
 		if count < 1 || count > 15 {
-			return 0, nil
+			return levelUnknown, nil
 		}
 		off := 8 + 4*(count-1)
-		return *(*uint32)(unsafe.Pointer(&raw[off])), nil
+		switch *(*uint32)(unsafe.Pointer(&raw[off])) {
+		case 4096:
+			return levelLow, nil
+		case 8192:
+			return levelMedium, nil
+		case 12288:
+			return levelHigh, nil
+		case 16384:
+			return levelSystem, nil
+		default:
+			return levelUnknown, nil
+		}
 	}
-	return 0, nil
+	return levelUnknown, nil
 }
