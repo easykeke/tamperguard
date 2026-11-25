@@ -45,6 +45,11 @@ const (
 	// legitimate process that the kernel layer would allow).
 	KindRASPBlocked  = "rasp.blocked"
 	KindRASPObserved = "rasp.observed"
+
+	// KindTamperRestored records a write that got past the blocking layers
+	// (for example an administrator who took ownership) and was reverted from
+	// the baseline by the self-heal loop.
+	KindTamperRestored = "tamper.restored"
 )
 
 var (

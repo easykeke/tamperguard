@@ -1,5 +1,12 @@
 # 变更记录
 
+## 未发布（0.2.1 开发中）
+
+- **Windows 无驱动自愈 + 服务加固（替代 minifilter）**：受保护目录建立内容基线，每 30s（`TG_WIN_SCAN_SECONDS`）对照，被管理员绕过修改/删除的文件回滚、基线外新增文件删除，事件记 `tamper.restored`；发布窗口内的变更视为可信并在窗口结束后成为新基线。服务安装脚本把 Agent 以 LocalSystem 注册、失败自动重启、服务 ACL 只允许 SYSTEM 停止。
+- **minifilter 驱动不纳入主计划**：驱动需要 WDK、测试签名/重启与微软签名，真实客户现场安装成本过高；保留为有签名能力客户的可选项。
+- 新增 `cmd/tg-winacl-test`：在真实 Windows 主机上验证"提权管理员写入被拒 + 授予/撤销 + 自愈回滚"。
+- `deploy/windows/`：服务安装脚本与部署说明。
+
 ## 0.2.0（2026-11-25）
 
 相对 0.1.0 的主要变化：Windows 被防护端（ACL 严格模式 + MIC）、Landlock 进程自保护、fs-verity 发布固化、路径模型跨平台、Windows 交叉编译 CI 任务。

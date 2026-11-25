@@ -39,6 +39,7 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 | 策略外路径可正常写 | 不影响未保护目录 |
 | 授权发布窗口内可写 | 标签临时降为 Medium + DACL 临时授权发布账号 |
 | 撤销后再次被拒 | 恢复 System 标签与锁定 DACL |
+| 管理员绕过被自愈回滚 | 模拟"改标签 + 夺取所有权 + 重写文件"，扫描周期内内容恢复，并产生 `tamper.restored` 事件 |
 | `unlock` 后可维护 | 继承权限与 Medium 标签恢复 |
 
 ## 为什么不能在本机测 minifilter 驱动

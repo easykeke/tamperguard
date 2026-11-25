@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/easykeke/tamperguard/internal/audit"
+	"github.com/easykeke/tamperguard/internal/baseline"
 	"github.com/easykeke/tamperguard/internal/policy"
 	"github.com/easykeke/tamperguard/internal/token"
 )
@@ -47,6 +48,15 @@ type WindowsACL struct {
 	mic         bool
 	micErr      error
 	allowAdmins bool
+
+	// self-heal baseline
+	base           *baseline.Manager
+	scanInterval   time.Duration
+	snapshotted    bool
+	needResnapshot bool
+	policyDigest   string
+	healMu         sync.Mutex
+	recent         map[string]int64
 
 	mu      sync.Mutex
 	rt      Runtime
@@ -103,6 +113,9 @@ func NewWindowsACL(cfg WindowsACLConfig) (*WindowsACL, error) {
 		}
 		w.sids = append(w.sids, sid)
 	}
+	if err := w.setupSelfHeal(cfg.StateDir); err != nil {
+		w.log.Warn("windows-acl: self-heal disabled (baseline unavailable)", "err", err)
+	}
 	go w.expiryLoop()
 	return w, nil
 }
@@ -122,6 +135,10 @@ func (w *WindowsACL) Capability() Capability {
 		reason += "; MIC: protected paths are labelled System with NO_WRITE_UP, so High-integrity (elevated administrator) processes are denied writes as well"
 	}
 	reason += "; a determined administrator can still stop the agent or retake ownership, which is why audit evidence exists"
+	if w.base != nil {
+		reason += "; self-heal: the protected tree is compared against a content-addressed baseline every " +
+			w.scanInterval.String() + " and unauthorised changes are reverted (tamper.restored)"
+	}
 	return Capability{
 		Kind:      "windows-acl",
 		Available: true,
@@ -179,6 +196,10 @@ func (w *WindowsACL) Update(rt Runtime) error {
 			}
 		}
 		applied[norm] = native
+	}
+
+	if w.base != nil {
+		w.maybeSnapshot(rt, now)
 	}
 
 	w.mu.Lock()
@@ -481,6 +502,9 @@ func (w *WindowsACL) Close() error {
 	w.once.Do(func() {
 		close(w.stop)
 		w.events.Close()
+		if w.base != nil {
+			_ = w.base.Close()
+		}
 	})
 	return nil
 }

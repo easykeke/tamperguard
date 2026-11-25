@@ -140,7 +140,7 @@ TamperGuard 的定位是“降低未授权写入受保护路径的成功率，�
 
 | 能防 | 不能防 | 只能检测 |
 |---|---|---|
-| 默认严格模式下，管理员进程的普通写入/删除/改名被拒：DACL 不授予 Administrators 写权限，且受保护路径带 System + `NO_WRITE_UP` 完整性标签，High 完整性的提权管理员同样被内核拒绝 | 取得文件所有权（SeTakeOwnershipPrivilege）后重写 DACL；改写 SACL 的完整性标签（SeSecurityPrivilege） | 心跳（默认 15 s）会重新施加 DACL 与标签，绕过窗口被压缩 |
+| 默认严格模式下，管理员进程的普通写入/删除/改名被拒：DACL 不授予 Administrators 写权限，且受保护路径带 System + `NO_WRITE_UP` 完整性标签，High 完整性的提权管理员同样被内核拒绝 | 取得文件所有权（SeTakeOwnershipPrivilege）后重写 DACL；改写 SACL 的完整性标签（SeSecurityPrivilege） | 心跳（默认 15 s）重新施加 DACL 与标签；自愈扫描（默认 30 s）把内容回滚为基线并记 `tamper.restored` |
 | | 停止/删除 Agent 服务、禁用防护 | 节点离线、心跳中断 |
 | | 直接写卷、离线修改、备份软件以 SYSTEM 身份绕过 ACL | 无可靠本地检测；依赖审计链与外部监控 |
 | | 加载未签名驱动等内核级操作 | 无 |

@@ -18,11 +18,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
 	"golang.org/x/sys/windows"
 
+	"github.com/easykeke/tamperguard/internal/audit"
 	"github.com/easykeke/tamperguard/internal/enforcer"
 	"github.com/easykeke/tamperguard/internal/policy"
 	"github.com/easykeke/tamperguard/internal/token"
@@ -86,6 +88,8 @@ func main() {
 		os.Exit(2)
 	}
 	stateDir := filepath.Join(root, "state")
+	// Fast scanner for the test only.
+	_ = os.Setenv("TG_WIN_SCAN_SECONDS", "2")
 
 	u, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -162,6 +166,44 @@ func main() {
 	}
 	err = os.WriteFile(index, []byte("evil-after-revoke"), 0o644)
 	check("write denied again after revocation", err != nil, errText(err))
+
+	fmt.Println("\n== self-heal after an administrator bypass ==")
+	// An administrator can still bypass ACL/MIC by relabelling the file and
+	// taking ownership. Simulate that bypass: the scanner must revert it.
+	user := os.Getenv("USERNAME")
+	_ = exec.Command("icacls", index, "/setintegritylevel", "Medium").Run()
+	_ = exec.Command("icacls", index, "/setowner", "Administrators", "/C").Run()
+	_ = exec.Command("icacls", index, "/grant", user+":F").Run()
+	bypass := os.WriteFile(index, []byte("evil-bypass"), 0o644)
+	check("administrator bypass write succeeded (expected without a driver)", bypass == nil, errText(bypass))
+
+	want := "published"
+	restored := false
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		if data, rerr := os.ReadFile(index); rerr == nil && string(data) == want {
+			restored = true
+			break
+		}
+	}
+	check("self-heal restored the file from baseline", restored, "content was not restored")
+
+	sawEvent := false
+	evTimer := time.After(5 * time.Second)
+drain:
+	for {
+		select {
+		case ev := <-eng.Events():
+			if ev.Kind == audit.KindTamperRestored {
+				sawEvent = true
+				break drain
+			}
+		case <-evTimer:
+			break drain
+		}
+	}
+	check("tamper.restored audit event emitted", sawEvent, "no event observed")
 
 	fmt.Println("\n== cleanup ==")
 	if uerr := enforcer.Unlock(stateDir); uerr != nil {
