@@ -21,7 +21,7 @@ TamperGuard 面向 Linux 主机上的网页目录与发布产物，解决“未�
 | 非目标 | 原因或边界 |
 |---|---|
 | 不防 root | 拿到 root 的攻击者可以杀进程、卸载 BPF 程序、改策略文件、读 Agent 私钥。详见 `docs/threat-model.md`。 |
-| RASP 只覆盖 Node.js | 当前 RASP 探针是 Node.js 版本（`rasp/node/tamperguard.js`），Java/PHP 运行时尚未提供；其它语言的应用层防护不成立。 |
+| RASP 只覆盖 Node.js 与 Java | 探针为 `rasp/node/tamperguard.js` 与 `rasp/java/`（-javaagent）；PHP 等其它运行时未提供，应用层防护在这些语言上不成立。 |
 | 不做恶意内容检测 | 不判断发布内容是否安全，只判断“写入者是否被授权、内容是否与已批准摘要一致”。 |
 | 不做网络侧防护 | 不替代 WAF、IPS、EDR；不阻断 webshell 的网络回连与横向移动。 |
 | 不承诺覆盖网络文件系统 | NFS/CIFS 上内核钩子与 fanotify 的支持都有限，见第 10 节。 |
@@ -703,6 +703,6 @@ sudo go test ./internal/enforcer -run NO_TESTS -bench . -benchtime=2000x
 | P1 内核主阻断完善 | mmap 父目录、link 源 inode、单文件规则 unlink/rename、observe 接线、SSE 推送与授权确认、新建子树的内核继承（d_instantiate）、性能基准均已完成；5.10 兼容待做 | 基本完成 | 5.10 与 6.6 至少各验证一次 |
 | P2 降级恢复 | fanotify 检测+回滚、基线、周期巡检、审批流、降级标红已完成；队列溢出处理与崩溃窗口恢复待补 | 基本完成 | `test/e2e/e2e-fanotify.sh` 通过 |
 | P3 容器与规模化 | overlayfs/容器场景已验证（`TestOverlayEnforcement`），部署形态齐备，审计导出已实现；多节点规模、审计保留与归档、自升级签名未做 | 部分完成 | 容器边界清单见第 9.2 节，不靠推断 |
-| P4 RASP | 运行期应用层防护 | Node.js 探针已实现（observe/ enforce 按路径切换、审计接入、e2e 通过）；Java/PHP 探针待做 | Node.js 场景可用；其它运行时另行评估 |
+| P4 RASP | 运行期应用层防护 | Node.js 与 Java 探针已实现（observe/enforce 按路径切换、策略热切换、审计接入、两条 e2e 通过）；PHP 探针待做；Java 依赖 JDK 16–21 的 SecurityManager | Node.js / Java 场景可用；其它运行时另行评估 |
 
 路线中的顺序不是强制的，但以下表述边界必须遵守：eBPF 执行器未在目标内核验证前，不能写“已实测拦截”；hook 矩阵未完整覆盖前，不能写“所有写入原语已覆盖”；P4 未实现前，不能出现“应用层防护”。

@@ -49,7 +49,17 @@ selected      : ebpf-lsm (degraded=false)
 | NFS / CIFS | 不承诺 | 内核钩子与 fanotify 在网络文件系统上行为不同 |
 | 直接写 upperdir/lowerdir | 不覆盖 | 需要宿主 root，超出威胁模型 |
 
-## 4. 自升级兼容性
+## 4. RASP 运行时兼容性
+
+| 运行时 | 接入方式 | 要求 | 状态 |
+|---|---|---|---|
+| Node.js | `NODE_OPTIONS="--require .../tamperguard.js"` | 无额外依赖；代理走 `fs` 包装 | 已验证（e2e-rasp） |
+| Java | `-javaagent:tg-rasp.jar=socket=...` | **JDK 16–21**（Unix domain socket + SecurityManager）；需 `-Djava.security.manager=allow` | 已验证（e2e-rasp-java） |
+| PHP / 其它 | 未提供 | — | 不可用 |
+
+Java 说明：探针通过 SecurityManager 拦截 `FilePermission` 的 write/delete 检查，覆盖 `java.io.FileOutputStream`、`File#delete`、`Files.write/newOutputStream/delete/move` 等；SecurityManager 在新 JDK 中被标记移除，装不上时探针只打警告、不会假装在防护。
+
+## 5. 自升级兼容性
 
 - Agent 与服务端使用同一份 Ed25519 发布密钥签名 manifest；老版本 Agent（无升级通道）不受影响。
 - 升级按 `os/arch` 选择产物，当前只支持与 Agent 相同的平台。

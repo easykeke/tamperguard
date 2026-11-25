@@ -48,9 +48,17 @@ e2e-fanotify:
 e2e-upgrade:
 	bash test/e2e/e2e-upgrade.sh
 
+## rasp-java: build the Java agent jar (needs JDK 17+)
+rasp-java:
+	bash rasp/java/build.sh
+
 ## e2e-rasp: Node.js runtime probe (needs node in PATH)
 e2e-rasp:
 	bash test/e2e/e2e-rasp.sh
+
+## e2e-rasp-java: JVM runtime probe (needs JDK 17-21)
+e2e-rasp-java:
+	bash test/e2e/e2e-rasp-java.sh
 
 ## vet: static checks
 vet:
