@@ -1,12 +1,12 @@
 # TamperGuard 快速开始（P0）
 
-本文从空环境走一遍 P0 的部署与验证：初始化控制面、注册节点、创建策略、验证拦截、走一次发布、吊销授权、检查审计链。所有命令在 WSL2 Ubuntu 24.04 上可执行，发行版 Linux 同理。
+本文从空环境走一遍完整部署：能力探测、初始化控制面、注册节点、创建策略、验证内核拦截、发布与吊销、审计导出、签名自升级、RASP 接入。命令在 WSL2 Ubuntu 24.04 上可直接执行，发行版 Linux 同理。
 
 先看三条前提：
 
-- 保护端必须宿主机 root，不能跑在容器里。
-- P0 的执行层是 eBPF LSM（代码已落地，待内核验证）；内核不满足条件或程序加载失败时回退 observe（不阻断，真实写入不会自动产生审计记录）并标记 degraded。observe 状态下看不到“写入被拒”的记录。
-- fanotify 降级与事件恢复是 P2，P0 没有 fanotify。RASP 是 P4，当前不存在。
+- 保护端必须宿主机 root，不能跑在普通容器里；K8s 场景用 privileged + hostPID 的 DaemonSet（见 `deploy/k8s/`）。
+- 执行层优先级：eBPF LSM（写入前同步阻断）→ fanotify（检测+回滚）→ observe（只记录，不伪装成防护）。用 `tg-agent probe` 查看本机实际会选哪一层，内核与文件系统兼容性见 `docs/compat.md`。
+- RASP 只覆盖 Node.js 与 Java（JDK 16–21），其它运行时没有应用层探针。
 
 命令里的 `tg-server`、`tg-agent`、`tg-publish` 均指 `make build` 产出的 `bin/` 下二进制。可消费发布令牌的 uid 由 `tg-agent enroll --publisher-uids` 配置，默认 `0`（演示方便），生产必须改成发布端专用 uid，具体见 6.3 与 9.2。
 
@@ -422,7 +422,70 @@ curl -sS --cacert "$CA" -b /tmp/tg.cookies "$BASE/api/v1/publish-requests/$REQ2"
 
 吊销只影响后续授权，不回滚已完成的发布。撤销发布主体后，要恢复发布需要用新的发布端身份或管理员处理撤销记录（当前没有“取消撤销”接口）。
 
-## 11. 常见问题
+## 11. 验证 D：签名自升级
+
+服务端发布一个 Agent 版本（manifest 用发布私钥签名）：
+
+```bash
+sudo ./bin/tg-server release --data-dir /var/lib/tamperguard \
+  --binary ./bin/tg-agent --version 0.2.0 --os linux --arch amd64
+```
+
+Agent 启动时和每 6 小时检查一次；发现新版本会校验签名、大小与 SHA-256，然后原子替换自身二进制并以 0 退出：
+
+```bash
+sudo systemctl restart tamperguard-agent   # 由 systemd 拉起新版本
+sudo journalctl -u tamperguard-agent -n 50 | grep upgraded
+```
+
+校验失败（产物被替换、签名不对、版本路径非法）时不会升级，日志里给出原因。
+关闭通道：`tg-agent run ... --auto-upgrade=false`。完整验证脚本：`sudo bash test/e2e/e2e-upgrade.sh`。
+
+## 12. 验证 E：RASP 接入
+
+RASP 探针连的是 Agent 的 Unix socket（默认 `/var/lib/tamperguard-agent/rasp.sock`），规则随策略热下发。
+
+Node.js：
+
+```bash
+NODE_OPTIONS="--require /opt/tamperguard/rasp/node/tamperguard.js" \
+TG_RASP_SOCKET=/var/lib/tamperguard-agent/rasp.sock \
+node app.js
+```
+
+Java（JDK 16–21）：
+
+```bash
+java -Djava.security.manager=allow \
+  -javaagent:/opt/tamperguard/dist/tg-rasp.jar=socket=/var/lib/tamperguard-agent/rasp.sock \
+  -jar app.jar
+```
+
+策略里把该路径写成 `mode: "observe"` 时只产生 `rasp.observed` 审计；改成 `enforce` 后，同一应用进程的下一次写入会被就地阻断（Node 抛 `EPERM`，Java 抛 `SecurityException`），无需重启。验证脚本：`sudo bash test/e2e/e2e-rasp.sh` 与 `sudo bash test/e2e/e2e-rasp-java.sh`。
+
+## 13. 审计导出与保留
+
+```bash
+# 证据导出（JSONL 或 CSV，可按节点与时间过滤）
+curl -sS --cacert "$CA" -b /tmp/tg.cookies \
+  "$BASE/api/v1/audit/export?node_id=$PROT_ID&format=csv" -o audit.csv
+
+# 链校验（返回 ok / records / from_seq）
+curl -sS --cacert "$CA" -b /tmp/tg.cookies \
+  "$BASE/api/v1/audit/verify?node_id=$PROT_ID" | jq .
+```
+
+默认永久保留审计记录。需要按天裁剪时在 `server.json` 里设置 `audit_retention_days`（例如 180）；裁剪后 `/audit/verify` 从现存最早记录开始校验，不会因为头部被删而误报。
+
+## 14. 能力探测与兼容性
+
+```bash
+sudo ./bin/tg-agent probe --state-dir /var/lib/tamperguard-agent
+```
+
+输出会说明内核版本、LSM 列表、BTF 是否可用、eBPF 与 fanotify 是否可加载，以及最终选择的执行层。5.10–6.2 与无 bpf LSM 的内核会自动降级，矩阵见 `docs/compat.md`。
+
+## 15. 常见问题
 
 ### 11.1 内核没有 bpf LSM，只能 observe
 
@@ -484,7 +547,7 @@ curl -sS --cacert "$CA" -b /tmp/tg.cookies "$BASE/api/v1/audit/verify?node_id=$P
 
 P0 的 `tg-publish` 直接写本机的 `target_dir`，不实现内容传输。发布端与节点分机时，需要部署侧用 rsync/SSH/共享存储把文件送到目标节点并保证写入经由目标节点的执行层，当前没有现成实现。quickstart 的端到端流程只适用于同机。
 
-## 12. 数据目录与文件
+## 16. 数据目录与文件
 
 | 路径 | 内容 |
 |---|---|

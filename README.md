@@ -120,3 +120,7 @@ Makefile            make build，产出 bin/ 下三个二进制
 ## 许可证
 
 Apache-2.0。
+
+## 变更记录
+
+见 [CHANGELOG.md](CHANGELOG.md)。

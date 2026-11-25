@@ -286,6 +286,29 @@ func (f *Fanotify) readLoop() {
 }
 
 func (f *Fanotify) handleMetadata(md *unix.FanotifyEventMetadata) {
+	if md.Mask&unix.FAN_Q_OVERFLOW != 0 {
+		// Events were dropped by the kernel: the restore path may have missed
+		// writes. Mark the backend unhealthy until a full scan reconciles the
+		// tree, and make the gap visible in the audit chain.
+		f.log.Error("fanotify: event queue overflow, forcing a rescan")
+		f.setHealth(errors.New("fanotify: event queue overflow; a scan is reconciling the tree"))
+		f.emit(Event{
+			Time:    time.Now().Unix(),
+			Kind:    audit.KindEnforcerError,
+			Path:    "",
+			Op:      policy.OpOpenWrite,
+			Subject: policy.Subject{ExePath: "kernel"},
+			Reason:  "fanotify-queue-overflow",
+		})
+		select {
+		case f.scan <- struct{}{}:
+		default:
+		}
+		if md.Fd >= 0 {
+			unix.Close(int(md.Fd))
+		}
+		return
+	}
 	path := ""
 	if md.Fd >= 0 {
 		if p, err := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(md.Fd))); err == nil {
@@ -468,6 +491,12 @@ func (f *Fanotify) scanOnce() {
 			return nil
 		})
 	}
+	f.mu.Lock()
+	if f.healthErr != nil && f.healthErr.Error() == "fanotify: event queue overflow; a scan is reconciling the tree" {
+		// The scan has now reconciled the tree; clear the overflow alert.
+		f.healthErr = nil
+	}
+	f.mu.Unlock()
 }
 
 func resolveSubject(pid int) policy.Subject {
