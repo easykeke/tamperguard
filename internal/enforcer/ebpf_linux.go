@@ -145,6 +145,7 @@ func NewEBPF(publisherUIDs []int) (*EBPF, error) {
 		{"inode_setxattr", objs.TgInodeSetxattr},
 		{"mmap_file", objs.TgMmapFile},
 		{"file_mprotect", objs.TgFileMprotect},
+		{"d_instantiate", objs.TgD_instantiate},
 	}
 	for _, p := range progs {
 		l, err := link.AttachLSM(link.LSMOptions{Program: p.prog})
@@ -160,6 +161,23 @@ func NewEBPF(publisherUIDs []int) (*EBPF, error) {
 	if err := objs.TgConfig.Update(uint32(0), uint32(1), ebpf.UpdateAny); err != nil {
 		e.Close()
 		return nil, fmt.Errorf("ebpf: enable enforcement: %w", err)
+	}
+	// Publisher uids drive in-kernel grant inheritance for newly created
+	// inodes; without them a nested directory created during a release would
+	// be protected but not yet granted.
+	if len(publisherUIDs) > 0 {
+		var cfg tgPubCfg
+		cfg.Count = uint32(len(publisherUIDs))
+		for i, uid := range publisherUIDs {
+			if i >= len(cfg.Uids) {
+				break
+			}
+			cfg.Uids[i] = uint32(uid)
+		}
+		if err := objs.Publishers.Update(uint32(0), cfg, ebpf.UpdateAny); err != nil {
+			e.Close()
+			return nil, fmt.Errorf("ebpf: set publisher uids: %w", err)
+		}
 	}
 	rd, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -289,6 +307,7 @@ func (e *EBPF) Update(rt Runtime) error {
 			_ = e.objs.Grants.Delete(k)
 		}
 	}
+	e.reconcileGrants(newGrants)
 	e.grantKeys = newGrants
 
 	if len(errs) > 0 {
@@ -310,6 +329,26 @@ func (e *EBPF) Counters() [8]uint64 {
 		}
 	}
 	return out
+}
+
+// reconcileGrants removes grant entries that userspace did not install.
+//
+// The kernel adds inherited grants for inodes created inside a granted tree
+// (d_instantiate), and userspace cannot track those keys. Without a sweep, a
+// revocation would leave inherited grants alive until the token TTL, which is a
+// real bypass. The sweep runs on every sync and only deletes entries absent
+// from the authoritative set, so the worst case is a short race during a
+// release, where a just-created file briefly loses its grant and the publisher's
+// retry loop covers it.
+func (e *EBPF) reconcileGrants(desired map[tgGrantKey]uint64) {
+	it := e.objs.Grants.Iterate()
+	var key tgGrantKey
+	var val uint64
+	for it.Next(&key, &val) {
+		if _, ok := desired[key]; !ok {
+			_ = e.objs.Grants.Delete(key)
+		}
+	}
 }
 
 // Stats returns the number of entries currently installed in the kernel maps.

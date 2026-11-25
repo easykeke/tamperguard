@@ -123,6 +123,22 @@ struct {
 	__uint(max_entries, 256 * 1024);
 } events SEC(".maps");
 
+/*
+ * Publisher uids, used to inherit an active grant onto inodes created inside a
+ * granted directory. A bounded array keeps the inheritance loop verifier-safe.
+ */
+struct pub_cfg {
+	__u32 count;
+	__u32 uids[8];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct pub_cfg);
+} publishers SEC(".maps");
+
 /* Debug counters: proves whether hooks run and whether lookups hit. Kept as a
  * permanent diagnostic (cheap, 8 slots) so "protection silently stopped" can be
  * distinguished from "protection works but nothing was attempted". */
@@ -274,6 +290,54 @@ static __always_inline int decide_dir(struct inode *dir, __u32 op)
 	}
 	emit(dir, op, V_DENY, -1);
 	return -1;
+}
+
+/*
+ * inherit_grant copies the parent directory's live grant onto a newly created
+ * inode, for every configured publisher uid. Without this, a release that
+ * creates a nested directory would write into it before userspace refreshes the
+ * index, and the kernel would (correctly but unhelpfully) deny its own release.
+ */
+static __always_inline void inherit_grant(struct inode *parent, struct inode *child)
+{
+	__u32 zero = 0;
+	struct pub_cfg *cfg;
+	__u64 now;
+	__u64 pino;
+	__u32 pdev;
+	__u32 cino;
+	__u32 cdev;
+
+	if (!parent || !child)
+		return;
+	cfg = bpf_map_lookup_elem(&publishers, &zero);
+	if (!cfg || cfg->count == 0)
+		return;
+	now = bpf_ktime_get_ns();
+	pino = BPF_CORE_READ(parent, i_ino);
+	pdev = inode_dev(parent);
+	cino = (__u32)BPF_CORE_READ(child, i_ino);
+	cdev = inode_dev(child);
+
+#pragma unroll
+	for (int i = 0; i < 8; i++) {
+		struct grant_key pk = {};
+		struct grant_key ck = {};
+		__u64 *exp;
+
+		if ((__u32)i >= cfg->count)
+			break;
+		pk.uid = cfg->uids[i];
+		pk.dev = pdev;
+		pk.ino = pino;
+		exp = bpf_map_lookup_elem(&grants, &pk);
+		if (!exp || *exp <= now)
+			continue;
+		ck.uid = cfg->uids[i];
+		ck.dev = cdev;
+		ck.ino = cino;
+		bpf_map_update_elem(&grants, &ck, exp, BPF_ANY);
+	}
 }
 
 static __always_inline struct inode *dentry_inode(struct dentry *de)
@@ -436,6 +500,55 @@ int BPF_PROG(tg_file_mprotect, struct vm_area_struct *vma, unsigned long reqprot
 		return 0;
 	de = BPF_CORE_READ(file, f_path.dentry);
 	return decide(BPF_CORE_READ(file, f_inode), dentry_parent(de), TG_OP_MPROTECT);
+}
+
+#define S_IFMT 0170000
+#define S_IFDIR 0040000
+
+/*
+ * Protection inheritance.
+ *
+ * When a new inode is instantiated inside a protected directory, index it
+ * immediately and inherit the parent's grant. This closes the window where a
+ * freshly created subtree existed on disk but was not yet in the kernel index
+ * (previously up to one heartbeat), which made a release creating a nested
+ * directory fail its own writes until userspace refreshed the index.
+ *
+ * The hook runs on every dentry instantiation, so the fast path is a single
+ * lookup of the parent directory: unprotected paths pay only that probe.
+ */
+SEC("lsm/d_instantiate")
+int BPF_PROG(tg_d_instantiate, struct dentry *dentry, struct inode *inode)
+{
+	struct inode *parent;
+	struct inode_key k = {};
+	__u8 mode;
+	umode_t imode;
+
+	if (!dentry || !inode)
+		return 0;
+	parent = dentry_parent(dentry);
+	if (!parent)
+		return 0;
+	mode = inode_mode(&protected_dirs, parent);
+	if (!mode)
+		return 0;
+
+	k.ino = BPF_CORE_READ(inode, i_ino);
+	k.dev = inode_dev(inode);
+	imode = BPF_CORE_READ(inode, i_mode);
+
+	if ((imode & S_IFMT) == S_IFDIR) {
+		if (inode_mode(&protected_dirs, inode) == mode)
+			return 0;
+		bpf_map_update_elem(&protected_dirs, &k, &mode, BPF_ANY);
+	} else {
+		if (inode_mode(&protected_files, inode) == mode)
+			return 0;
+		bpf_map_update_elem(&protected_files, &k, &mode, BPF_ANY);
+	}
+	inherit_grant(parent, inode);
+	return 0;
 }
 
 /*

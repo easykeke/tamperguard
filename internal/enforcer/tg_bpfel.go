@@ -24,6 +24,11 @@ type tgInodeKey struct {
 	Pad uint32
 }
 
+type tgPubCfg struct {
+	Count uint32
+	Uids  [8]uint32
+}
+
 // loadTg returns the embedded CollectionSpec for tg.
 func loadTg() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_TgBytes)
@@ -65,6 +70,7 @@ type tgSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tgProgramSpecs struct {
+	TgD_instantiate   *ebpf.ProgramSpec `ebpf:"tg_d_instantiate"`
 	TgFileMprotect    *ebpf.ProgramSpec `ebpf:"tg_file_mprotect"`
 	TgFileOpen        *ebpf.ProgramSpec `ebpf:"tg_file_open"`
 	TgFilePermission  *ebpf.ProgramSpec `ebpf:"tg_file_permission"`
@@ -88,6 +94,7 @@ type tgMapSpecs struct {
 	Grants         *ebpf.MapSpec `ebpf:"grants"`
 	ProtectedDirs  *ebpf.MapSpec `ebpf:"protected_dirs"`
 	ProtectedFiles *ebpf.MapSpec `ebpf:"protected_files"`
+	Publishers     *ebpf.MapSpec `ebpf:"publishers"`
 	TgConfig       *ebpf.MapSpec `ebpf:"tg_config"`
 	TgSeen         *ebpf.MapSpec `ebpf:"tg_seen"`
 	TgStats        *ebpf.MapSpec `ebpf:"tg_stats"`
@@ -116,6 +123,7 @@ type tgMaps struct {
 	Grants         *ebpf.Map `ebpf:"grants"`
 	ProtectedDirs  *ebpf.Map `ebpf:"protected_dirs"`
 	ProtectedFiles *ebpf.Map `ebpf:"protected_files"`
+	Publishers     *ebpf.Map `ebpf:"publishers"`
 	TgConfig       *ebpf.Map `ebpf:"tg_config"`
 	TgSeen         *ebpf.Map `ebpf:"tg_seen"`
 	TgStats        *ebpf.Map `ebpf:"tg_stats"`
@@ -127,6 +135,7 @@ func (m *tgMaps) Close() error {
 		m.Grants,
 		m.ProtectedDirs,
 		m.ProtectedFiles,
+		m.Publishers,
 		m.TgConfig,
 		m.TgSeen,
 		m.TgStats,
@@ -137,6 +146,7 @@ func (m *tgMaps) Close() error {
 //
 // It can be passed to loadTgObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tgPrograms struct {
+	TgD_instantiate   *ebpf.Program `ebpf:"tg_d_instantiate"`
 	TgFileMprotect    *ebpf.Program `ebpf:"tg_file_mprotect"`
 	TgFileOpen        *ebpf.Program `ebpf:"tg_file_open"`
 	TgFilePermission  *ebpf.Program `ebpf:"tg_file_permission"`
@@ -154,6 +164,7 @@ type tgPrograms struct {
 
 func (p *tgPrograms) Close() error {
 	return _TgClose(
+		p.TgD_instantiate,
 		p.TgFileMprotect,
 		p.TgFileOpen,
 		p.TgFilePermission,
