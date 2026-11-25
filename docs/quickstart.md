@@ -514,6 +514,25 @@ sudo ./bin/tg-agent landlock --check        # 查看内核 Landlock ABI
 sudo bash test/e2e/e2e-landlock.sh          # 端到端验证
 ```
 
+## 15.1 发布固化（fs-verity，可选）
+
+在支持 fs-verity 的内核与文件系统上，可以让发布安装后的文件变成内核级只读并校验读取：
+
+```bash
+sudo ./bin/tg-publish run --state-dir /var/lib/tamperguard-publish --verity   # 本地发布
+sudo ./bin/tg-agent run  --state-dir /var/lib/tamperguard --verity            # pull 交付时固化
+```
+
+`tg-agent probe` 会显示 `fs-verity : available/unavailable`；也可单独操作：
+
+```bash
+sudo ./bin/tg-agent verity enable /var/www/site/index.html
+sudo ./bin/tg-agent verity digest /var/www/site/index.html
+sudo ./bin/tg-agent verity check  /var/www/site/index.html
+```
+
+启用后文件不可再写（`EPERM`），下次发布通过 rename 替换旧文件，不冲突。验证脚本：`sudo bash test/e2e/e2e-verity.sh`（内核不支持时自动跳过）。
+
 ## 16. 常见问题
 
 ### 11.1 内核没有 bpf LSM，只能 observe
@@ -576,7 +595,7 @@ curl -sS --cacert "$CA" -b /tmp/tg.cookies "$BASE/api/v1/audit/verify?node_id=$P
 
 P0 的 `tg-publish` 直接写本机的 `target_dir`，不实现内容传输。发布端与节点分机时，需要部署侧用 rsync/SSH/共享存储把文件送到目标节点并保证写入经由目标节点的执行层，当前没有现成实现。quickstart 的端到端流程只适用于同机。
 
-## 17. 数据目录与文件
+## 18. 数据目录与文件
 
 | 路径 | 内容 |
 |---|---|

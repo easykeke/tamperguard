@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/easykeke/tamperguard/internal/audit"
+	"github.com/easykeke/tamperguard/internal/fsverity"
 	"github.com/easykeke/tamperguard/internal/store"
 )
 
@@ -65,9 +66,32 @@ func (a *Agent) deliverOne(ctx context.Context, req store.PublishRequest) {
 		}
 		written++
 	}
+	if a.opts.Verity {
+		a.enableVerity(root, info.Files)
+	}
 	_ = a.client.CompleteDelivery(ctx, req.ID, true, "")
 	a.record(audit.KindPublishDone, "", fmt.Sprintf("pull delivery %s: %d files", req.ID, written))
 	a.log.Info("pull delivery installed", "request", req.ID, "files", written)
+}
+
+// enableVerity hardens the files just delivered: fs-verity makes them read-only
+// and verifies every read against a Merkle tree. Best effort: unsupported
+// filesystems log one warning and the kernel enforcer still protects the tree.
+func (a *Agent) enableVerity(root string, files []store.PublishFile) {
+	for _, f := range files {
+		rel, ok := cleanRelPath(f.Path)
+		if !ok {
+			continue
+		}
+		dst := filepath.Join(root, filepath.FromSlash(rel))
+		if err := fsverity.Enable(dst); err != nil {
+			a.log.Warn("fs-verity not applied; release remains protected by the kernel enforcer",
+				"file", dst, "err", err)
+			a.record(audit.KindEnforcerError, dst, "fs-verity: "+err.Error())
+			return
+		}
+	}
+	a.log.Info("pull delivery hardened with fs-verity", "files", len(files))
 }
 
 // writeDeliveredFile retries on EPERM while the grant propagates to the kernel.

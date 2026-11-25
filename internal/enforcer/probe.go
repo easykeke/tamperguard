@@ -16,6 +16,7 @@ type ProbeReport struct {
 	BPFLoadError  string `json:"bpf_load_error,omitempty"`
 	FanotifyError string `json:"fanotify_error,omitempty"`
 	LandlockABI   int    `json:"landlock_abi,omitempty"`
+	FSVerity      string `json:"fsverity,omitempty"`
 	Selected      string `json:"selected"`
 	Degraded      bool   `json:"degraded"`
 }
@@ -41,6 +42,9 @@ func FormatProbe(r ProbeReport) string {
 			fmt.Fprintf(&b, "landlock      : ABI v%d (process self-protection available)\n", r.LandlockABI)
 		} else {
 			fmt.Fprintf(&b, "landlock      : unavailable (process self-protection disabled)\n")
+		}
+		if r.FSVerity != "" {
+			fmt.Fprintf(&b, "fs-verity     : %s\n", r.FSVerity)
 		}
 	}
 	if r.BPFLoadError != "" {

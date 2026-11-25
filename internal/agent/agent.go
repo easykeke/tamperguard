@@ -33,6 +33,8 @@ type Options struct {
 	RASP bool
 	// RASPSocket overrides the probe socket path (default <stateDir>/rasp.sock).
 	RASPSocket string
+	// Verity enables fs-verity on files installed by pull deliveries.
+	Verity bool
 }
 
 // Agent is the protect-side runtime: it syncs policy, feeds the enforcer and

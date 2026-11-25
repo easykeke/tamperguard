@@ -25,6 +25,7 @@ import (
 
 	"github.com/easykeke/tamperguard/internal/agent"
 	"github.com/easykeke/tamperguard/internal/config"
+	"github.com/easykeke/tamperguard/internal/fsverity"
 	"github.com/easykeke/tamperguard/internal/store"
 	"github.com/easykeke/tamperguard/internal/token"
 )
@@ -123,10 +124,12 @@ type Publisher struct {
 	issuerPub ed25519.PublicKey
 	log       *slog.Logger
 	interval  time.Duration
+	verity    bool
 }
 
-// New builds a publisher from persisted state.
-func New(state *config.AgentState, logger *slog.Logger) (*Publisher, error) {
+// New builds a publisher from persisted state. verity enables fs-verity on the
+// files of every release it installs locally.
+func New(state *config.AgentState, logger *slog.Logger, verity bool) (*Publisher, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -238,6 +241,9 @@ func (p *Publisher) handle(ctx context.Context, req store.PublishRequest) error 
 		return err
 	}
 	p.log.Info("release written", "request", req.ID, "files", written, "token", claims.TokenID)
+	if p.verity {
+		p.enableVerity(req, man)
+	}
 	if err := p.client.CompleteRequest(ctx, req.ID, true, ""); err != nil {
 		return fmt.Errorf("publish: report completion: %w", err)
 	}
@@ -268,6 +274,23 @@ func (p *Publisher) publishPull(ctx context.Context, req store.PublishRequest, m
 	}
 	p.log.Info("release staged for pull delivery", "request", req.ID, "files", len(man.Entries))
 	return nil
+}
+
+// enableVerity hardens the files just written: fs-verity makes them read-only
+// and verifies every read against a Merkle tree, so even out-of-band tampering
+// surfaces as EIO instead of attacker content. Best effort: on a filesystem
+// without verity support a single warning is logged (the kernel enforcer still
+// protects the tree).
+func (p *Publisher) enableVerity(req store.PublishRequest, man *Manifest) {
+	for _, e := range man.Entries {
+		dst := filepath.Join(req.TargetDir, filepath.FromSlash(e.Rel))
+		if err := fsverity.Enable(dst); err != nil {
+			p.log.Warn("fs-verity not applied; release remains protected by the kernel enforcer",
+				"request", req.ID, "file", dst, "err", err)
+			return
+		}
+	}
+	p.log.Info("release hardened with fs-verity", "request", req.ID, "files", len(man.Entries))
 }
 
 // writeWithGrantSettle retries while the protected node has not yet installed

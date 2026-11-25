@@ -32,6 +32,7 @@ selected      : ebpf-lsm (degraded=false)
 | 5.10 – 6.2（上述条件中的 BTF/LSM 满足） | 大概率回退 fanotify | 检测+回滚 | 未验证；LSM hook 签名在 6.3 前后有差异，加载失败即自动降级 |
 | 无 bpf LSM / 无 BTF / 无 BPF 权限 | fanotify | 检测+回滚（覆盖写毫秒级回滚、新建/删除巡检恢复） | 已在 6.6 验证 |
 | 无 fanotify 或无 CAP_SYS_ADMIN | observe | 只记录不阻断，节点标记 degraded | 已验证（显式降级，不伪装） |
+| 内核启用 `CONFIG_FS_VERITY`，且文件系统带 `verity` 特性（ext4/f2fs/btrfs） | fs-verity 发布固化（`--verity`） | 发布安装的文件变为只读（写入 `EPERM`），每次读页（含 mmap）按 Merkle 树校验，坏数据 `EIO`/`SIGBUS`；与发布窗口天然兼容（下次发布 rename 覆盖即可） | `tg-agent probe` 报告可用性；本机 WSL2 内核未启用该选项，**未做运行时验证** |
 | 任意 Linux（内核启用 Landlock，`lsm=` 含 `landlock`） | landlock（进程自保护） | 把 Web 进程及其子进程限制为只读视图：站点目录的写/删/改名返回 EACCES，无需 root、无需 eBPF | 已在 6.6 验证（ABI 3）；`tg-agent landlock --check` 查看 ABI，无 Landlock 时该层跳过 |
 
 关键约束：

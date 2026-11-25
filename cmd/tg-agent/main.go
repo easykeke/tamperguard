@@ -22,6 +22,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/agent"
 	"github.com/easykeke/tamperguard/internal/config"
 	"github.com/easykeke/tamperguard/internal/enforcer"
+	"github.com/easykeke/tamperguard/internal/fsverity"
 	"github.com/easykeke/tamperguard/internal/landlock"
 )
 
@@ -40,6 +41,8 @@ func main() {
 		err = cmdProbe(os.Args[2:])
 	case "landlock":
 		err = cmdLandlock(os.Args[2:])
+	case "verity":
+		err = cmdVerity(os.Args[2:])
 	case "unlock":
 		err = cmdUnlock(os.Args[2:])
 	case "help", "-h", "--help":
@@ -63,6 +66,7 @@ func usage() {
   tg-agent run    [--state-dir DIR] [--enforcer auto|ebpf|fanotify|windows-acl|observe]
   tg-agent probe  [--state-dir DIR]
   tg-agent landlock [--allow-write DIRS] [--check] -- CMD [ARGS...]
+  tg-agent verity  enable|digest|check PATH
   tg-agent unlock [--state-dir DIR]   (Windows: restore inherited permissions)
 `)
 }
@@ -147,6 +151,38 @@ func cmdLandlock(args []string) error {
 	return nil
 }
 
+// cmdVerity exposes fs-verity operations for operators and tests.
+func cmdVerity(args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: tg-agent verity enable|digest|check PATH")
+	}
+	action, path := args[0], args[1]
+	switch action {
+	case "enable":
+		if err := fsverity.Enable(path); err != nil {
+			return err
+		}
+		fmt.Printf("fs-verity enabled: %s\n", path)
+		return nil
+	case "digest":
+		digest, err := fsverity.Digest(path)
+		if err != nil {
+			return err
+		}
+		fmt.Println(digest)
+		return nil
+	case "check":
+		ok, err := fsverity.IsVerity(path)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("verity=%v\n", ok)
+		return nil
+	default:
+		return fmt.Errorf("unknown verity action %q (want enable, digest or check)", action)
+	}
+}
+
 // cmdUnlock restores inherited permissions on Windows (explicit operator
 // action; the agent never unlocks on shutdown or crash).
 func cmdUnlock(args []string) error {
@@ -213,6 +249,7 @@ func cmdRun(args []string) error {
 	raspEnabled := fs.Bool("rasp", true, "serve the application-layer probe socket")
 	raspSocket := fs.String("rasp-socket", "", "override the probe socket path")
 	integrity := fs.Bool("integrity", true, "Windows: also label protected paths High (NO_WRITE_UP), needs SeSecurityPrivilege")
+	verity := fs.Bool("verity", false, "enable fs-verity on files installed by pull deliveries (read-only + verified reads)")
 	_ = fs.Parse(args)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -242,6 +279,7 @@ func cmdRun(args []string) error {
 		UpgradeInterval: *upgradeInterval,
 		RASP:            *raspEnabled,
 		RASPSocket:      *raspSocket,
+		Verity:          *verity,
 	})
 	if err != nil {
 		return err

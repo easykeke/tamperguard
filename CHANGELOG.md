@@ -2,6 +2,7 @@
 
 ## 未发布（0.2.0 开发中）
 
+- **fs-verity 发布固化（P5.3）**：`tg-publish run --verity`（本地发布）与 `tg-agent run --verity`（pull 交付）在写入完成后对每个文件启用 fs-verity——文件变为内核级只读、读取按 Merkle 树校验；`tg-agent verity enable|digest|check` 提供运维入口；`tg-agent probe` 报告可用性。运行环境需内核 `CONFIG_FS_VERITY` + 文件系统 `verity` 特性（开发用 WSL2 内核未启用，运行时验证待补，代码路径已用 ioctl 错误码验证）。
 - **Windows 完整性级别加固（P5.2）**：在 ACL 锁定之外给受保护路径加 High + `NO_WRITE_UP` 完整性标签（继承），Medium 完整性的 IIS 应用池/PHP/普通用户进程即使 DACL 被放宽也写不进去；发布窗口内临时降为 Medium 放行授权账号；`--integrity=false` 可关闭，`tg-agent unlock` 同步复位为 Medium。
 - **Landlock 进程自保护（P5.1）**：`tg-agent landlock [--allow-write DIR] -- <cmd>` 把 Web 进程及其子进程限制为只读视图，站点目录的写/删/改名由内核返回 `EACCES`；不需要 root 或 eBPF，约束不可撤销。默认放行 `/tmp`、`/var/tmp`、`/dev/shm` 与 `/dev/null` 等设备文件；`tg-agent landlock --check` 查看 ABI；`test/e2e/e2e-landlock.sh` 验证（含 Node.js 运行时演示）。
 - **Windows 被防护端（实验性）**：ACL 锁定执行层（SYSTEM/Administrators 全权、Everyone 只读，发布窗口临时授权发布账号），`--publisher-sids` 配置授权账号；`tg-agent probe` 可检测平台并报告执行层；Agent 以管理员运行是前提。

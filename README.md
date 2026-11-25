@@ -13,6 +13,7 @@ TamperGuard 是面向 Linux 主机的网页目录防篡改系统：内核层同�
 | 内核同步阻断 | eBPF LSM 在 open/write/create/unlink/rename/setattr/mmap 等原语进入前拒绝未授权写入，不是事后扫描。内核不支持或加载失败时回退 observe（不阻断，也不会自动记录真实写入），并标记 degraded。 | 不覆盖网络文件系统保证、容器 OverlayFS（P3 验证）、已打开 fd 之外的任意 root 行为；P0 的 fanotify 降级尚未实现（P2）。 |
 | 跨平台执行层 | Windows 没有 eBPF/fanotify 对应物：用 NTFS ACL 锁定（SYSTEM/Administrators 全权、Everyone 只读）叠加 High 完整性标签（`NO_WRITE_UP`，Medium 进程即使 DACL 允许也写不进去），发布窗口给发布账号临时加写权限并把标签降为 Medium，到期或吊销即收回；执行层由平台自动选择，`tg-agent probe` 可查看结果。 | 挡不住管理员；拿不到每次写事件；第三方安全软件重置 ACL 后需要重新应用。先进路线（minifilter 驱动、完整性级别）见 [先进技术调研](docs/advanced-techniques.md)。 |
 | 进程自保护 | `tg-agent landlock [--allow-write DIR] -- <web 进程>`：把 Web 服务放进只读沙箱，站点目录的写入/删除/重命名由内核直接拒绝（EACCES），即使该进程被 RCE 也改不了内容；不需要 root，也不需要 eBPF。 | 只能约束自身及其子进程；约束前已打开的 fd 不受限；被约束进程如果自己再 exec 也无法解除（设计如此）。 |
+| 发布固化 | `--verity`：发布安装完成后对文件启用 fs-verity，文件变为内核级只读（写入 `EPERM`），读取按 Merkle 树校验（含 mmap），可对抗磁盘/固件级篡改。 | 需要内核 `CONFIG_FS_VERITY` 与文件系统 `verity` 特性；本机内核未启用，运行时验证待补。 |
 
 ## 架构
 

@@ -72,8 +72,12 @@ e2e-pull:
 e2e-landlock:
 	bash test/e2e/e2e-landlock.sh
 
+## e2e-verity: fs-verity release hardening (skips on kernels without support)
+e2e-verity:
+	bash test/e2e/e2e-verity.sh
+
 ## e2e-all: every end-to-end test (run as root; needs node/jdk/clang for some)
-e2e-all: e2e-sim e2e-ebpf e2e-fanotify e2e-upgrade e2e-rasp e2e-rasp-java e2e-pull e2e-landlock
+e2e-all: e2e-sim e2e-ebpf e2e-fanotify e2e-upgrade e2e-rasp e2e-rasp-java e2e-pull e2e-landlock e2e-verity
 
 ## release: build linux amd64/arm64 tarballs with checksums into dist/release
 release:

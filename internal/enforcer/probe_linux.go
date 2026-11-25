@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/easykeke/tamperguard/internal/fsverity"
 	"github.com/easykeke/tamperguard/internal/landlock"
 )
 
@@ -42,6 +43,15 @@ func Probe(stateDir string) ProbeReport {
 	}
 	if abi, err := landlock.ABI(); err == nil {
 		rep.LandlockABI = abi
+	}
+	probeDir := stateDir
+	if probeDir == "" {
+		probeDir = "/tmp"
+	}
+	if st := fsverity.Probe(probeDir); st.Supported {
+		rep.FSVerity = "available"
+	} else {
+		rep.FSVerity = "unavailable: " + st.Reason
 	}
 	rep.LSMHasBPF = false
 	for _, part := range strings.Split(rep.LSMActive, ",") {

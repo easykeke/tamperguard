@@ -42,13 +42,14 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `TamperGuard release agent
 
-  tg-publish run [--state-dir DIR]
+  tg-publish run [--state-dir DIR] [--verity]
 `)
 }
 
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
+	verity := fs.Bool("verity", false, "enable fs-verity on the files of every locally installed release")
 	_ = fs.Parse(args)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -61,7 +62,7 @@ func cmdRun(args []string) error {
 	if state.Role != "publish" {
 		return fmt.Errorf("this identity has role %q; enrol with --role publish", state.Role)
 	}
-	p, err := publish.New(state, logger)
+	p, err := publish.New(state, logger, *verity)
 	if err != nil {
 		return err
 	}
