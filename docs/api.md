@@ -137,7 +137,7 @@ write and retries on `EPERM` while the token is valid.
 | GET | `/audit` | `node_id,kind,limit,before_seq,from,to` | Newest first; `from`/`to` are unix seconds |
 | GET | `/audit/export` | `node_id,kind,from,to,limit,format=jsonl\|csv` | Streaming evidence export; sets `Content-Disposition` |
 | GET | `/audit/state` | — | Per-agent `{next_seq,last_hash,alert}` — gap/fork detection |
-| GET | `/audit/verify` | `node_id` | Re-verifies stored chain, returns ok/first bad seq |
+| GET | `/audit/verify` | `node_id` | Re-verifies the stored chain, returns `{ok, records, from_seq}`; verification starts at the oldest stored record, so a retention purge does not make it fail |
 
 ## Agent (mTLS)
 
@@ -146,6 +146,8 @@ write and retries on `EPERM` while the token is valid.
 | POST | `/agent/heartbeat` | `{"status","enforcer","policy_digest","caps","degraded","audit_seq","enforcer_healthy"}` | Returns `{"policy":Snapshot,"grants":[...],"revocations":[...],"server_time","heartbeat_interval"}` |
 | POST | `/agent/audit` | `{"records":[...]}` | Batch upload; server verifies chain, returns `{"ack_seq","alerts":[...]}` |
 | POST | `/agent/grants` | `{"active_tokens":["tok_..."]}` | Agent reports which grants it actually installed; used by the publisher readiness check |
+| GET | `/agent/upgrade` | `current,os,arch` | `{"available","current","manifest":{"version","os","arch","sha256","size","signature"}}`; manifest is Ed25519-signed |
+| GET | `/agent/upgrade/download` | `version,os,arch` | Streams the signed agent binary |
 | GET | `/agent/stream` | — | `text/event-stream`. Events: `hello`, `policy`, `revoke`, `grant`. A dropped event only costs latency; the heartbeat reconciles. |
 
 Agents heartbeat every 15 s and **also** hold a push stream. Policy changes,

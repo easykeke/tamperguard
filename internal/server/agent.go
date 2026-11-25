@@ -122,9 +122,10 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		CAPEM:      string(caPEM),
 		ServerTime: s.now().Unix(),
 		AgentConfig: map[string]string{
-			"issuer_public_key": hexKey(s.tokenPub),
-			"policy_public_key": hexKey(s.policyPub),
-			"heartbeat_seconds": itoa(s.cfg.HeartbeatSeconds),
+			"issuer_public_key":  hexKey(s.tokenPub),
+			"policy_public_key":  hexKey(s.policyPub),
+			"release_public_key": hexKey(s.releasePub),
+			"heartbeat_seconds":  itoa(s.cfg.HeartbeatSeconds),
 		},
 	})
 }

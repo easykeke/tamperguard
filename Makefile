@@ -44,6 +44,14 @@ e2e-ebpf:
 e2e-fanotify:
 	bash test/e2e/e2e-fanotify.sh
 
+## e2e-upgrade: signed self-upgrade channel
+e2e-upgrade:
+	bash test/e2e/e2e-upgrade.sh
+
+## e2e-rasp: Node.js runtime probe (needs node in PATH)
+e2e-rasp:
+	bash test/e2e/e2e-rasp.sh
+
 ## vet: static checks
 vet:
 	$(GO) vet ./...

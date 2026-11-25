@@ -11,9 +11,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -28,6 +31,7 @@ import (
 
 	"github.com/easykeke/tamperguard/internal/config"
 	"github.com/easykeke/tamperguard/internal/idgen"
+	"github.com/easykeke/tamperguard/internal/release"
 	"github.com/easykeke/tamperguard/internal/server"
 	"github.com/easykeke/tamperguard/internal/store"
 	"github.com/easykeke/tamperguard/internal/token"
@@ -47,6 +51,8 @@ func main() {
 		err = cmdServe(os.Args[2:])
 	case "bootstrap-token":
 		err = cmdBootstrapToken(os.Args[2:])
+	case "release":
+		err = cmdRelease(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -67,6 +73,7 @@ func usage() {
   tg-server init [--data-dir DIR] [--listen ADDR]
   tg-server serve [--data-dir DIR]
   tg-server bootstrap-token [--data-dir DIR] [--role protect|publish]
+  tg-server release --data-dir DIR --binary PATH --version V [--os linux] [--arch amd64]
 `)
 }
 
@@ -126,8 +133,14 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
+	releasePriv, err := genKeyFile(filepath.Join(*dataDir, config.KeysDir, config.ReleaseSignFile),
+		filepath.Join(*dataDir, config.KeysDir, config.ReleasePubFile))
+	if err != nil {
+		return err
+	}
 	_ = tokenPriv
 	_ = policyPriv
+	_ = releasePriv
 
 	// Session key and admin password.
 	sessKey := make([]byte, 32)
@@ -225,6 +238,69 @@ func cmdBootstrapToken(args []string) error {
 		return err
 	}
 	fmt.Printf("bootstrap token (%s role, valid for one use): %s\n", *role, tok)
+	return nil
+}
+
+// cmdRelease publishes an agent binary for self-upgrade: it copies the file
+// into the release store, records its hash, and prints the signed manifest.
+func cmdRelease(args []string) error {
+	fs := flag.NewFlagSet("release", flag.ExitOnError)
+	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	binary := fs.String("binary", "", "agent binary to publish")
+	version := fs.String("version", "", "version string, e.g. 0.2.0")
+	osName := fs.String("os", "linux", "target OS")
+	arch := fs.String("arch", "amd64", "target architecture")
+	_ = fs.Parse(args)
+	if *binary == "" || *version == "" {
+		return fmt.Errorf("--binary and --version are required")
+	}
+
+	cfg, err := config.LoadServer(*dataDir)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(filepath.Join(*dataDir, "tamperguard.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	data, err := os.ReadFile(*binary)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	manifest := release.Manifest{
+		Version: *version,
+		OS:      *osName,
+		Arch:    *arch,
+		SHA256:  hex.EncodeToString(sum[:]),
+		Size:    int64(len(data)),
+	}
+	priv, err := config.ReadEd25519Private(cfg.KeyPath(config.ReleaseSignFile))
+	if err != nil {
+		return fmt.Errorf("release signing key: %w", err)
+	}
+	if err := manifest.Sign(priv); err != nil {
+		return err
+	}
+
+	destDir := filepath.Join(*dataDir, "releases", *version)
+	if err := os.MkdirAll(destDir, 0o750); err != nil {
+		return err
+	}
+	dest := filepath.Join(destDir, "tg-agent-"+*osName+"-"+*arch)
+	if err := config.WriteFileAtomic(dest, data, 0o755); err != nil {
+		return err
+	}
+	if err := st.UpsertRelease(store.Release{
+		Version: *version, OS: *osName, Arch: *arch,
+		SHA256: manifest.SHA256, Size: manifest.Size, PublishedAt: time.Now().Unix(),
+	}); err != nil {
+		return err
+	}
+	raw, _ := json.MarshalIndent(manifest, "", "  ")
+	fmt.Printf("published %s/%s %s (%d bytes, sha256 %s)\n%s\n", *osName, *arch, *version, manifest.Size, manifest.SHA256, raw)
 	return nil
 }
 

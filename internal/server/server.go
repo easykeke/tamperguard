@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/easykeke/tamperguard/internal/config"
@@ -46,18 +47,23 @@ type Server struct {
 	log *slog.Logger
 	now func() time.Time
 
-	tokenPub   ed25519.PublicKey
-	tokenPriv  ed25519.PrivateKey
-	policyPub  ed25519.PublicKey
-	policyPriv ed25519.PrivateKey
-	caCert     *x509.Certificate
-	caKey      ed25519.PrivateKey
-	sessionKey []byte
-	tlsConf    *tls.Config
+	tokenPub    ed25519.PublicKey
+	tokenPriv   ed25519.PrivateKey
+	policyPub   ed25519.PublicKey
+	policyPriv  ed25519.PrivateKey
+	releasePub  ed25519.PublicKey
+	releasePriv ed25519.PrivateKey
+	caCert      *x509.Certificate
+	caKey       ed25519.PrivateKey
+	sessionKey  []byte
+	tlsConf     *tls.Config
 
 	mux *http.ServeMux
 	ui  fs.FS
 	hub *Hub
+
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // New loads keys and builds the server. It fails closed: if any key material
@@ -69,7 +75,8 @@ func New(cfg *config.Server, st *store.Store, opts Options) (*Server, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	s := &Server{cfg: cfg, st: st, log: opts.Logger, now: opts.Now, ui: opts.UI, hub: NewHub()}
+	s := &Server{cfg: cfg, st: st, log: opts.Logger, now: opts.Now, ui: opts.UI, hub: NewHub(),
+		stop: make(chan struct{})}
 
 	var err error
 	if s.sessionKey, err = cfg.SessionKeyBytes(); err != nil {
@@ -84,6 +91,11 @@ func New(cfg *config.Server, st *store.Store, opts Options) (*Server, error) {
 	}
 	s.policyPub = s.policyPriv.Public().(ed25519.PublicKey)
 
+	if s.releasePriv, err = config.ReadEd25519Private(cfg.KeyPath(config.ReleaseSignFile)); err != nil {
+		return nil, fmt.Errorf("server: release signing key: %w", err)
+	}
+	s.releasePub = s.releasePriv.Public().(ed25519.PublicKey)
+
 	if s.caCert, s.caKey, err = loadCA(cfg.KeyPath(config.CACertFile), cfg.KeyPath(config.CAKeyFile)); err != nil {
 		return nil, err
 	}
@@ -92,7 +104,37 @@ func New(cfg *config.Server, st *store.Store, opts Options) (*Server, error) {
 	}
 
 	s.routes()
+	if cfg.AuditRetentionDays > 0 {
+		go s.retentionLoop()
+	}
 	return s, nil
+}
+
+// retentionLoop enforces the optional audit retention window. Records are
+// evidence, so retention is off unless the operator sets it explicitly.
+func (s *Server) retentionLoop() {
+	purge := func() {
+		cutoff := s.now().Add(-time.Duration(s.cfg.AuditRetentionDays) * 24 * time.Hour).Unix()
+		n, err := s.st.PurgeAuditBefore(cutoff)
+		if err != nil {
+			s.log.Warn("audit retention purge failed", "err", err)
+			return
+		}
+		if n > 0 {
+			s.log.Info("audit retention purged records", "count", n, "retention_days", s.cfg.AuditRetentionDays)
+		}
+	}
+	purge()
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+			purge()
+		}
+	}
 }
 
 func loadCA(certPath, keyPath string) (*x509.Certificate, ed25519.PrivateKey, error) {
@@ -147,6 +189,8 @@ func (s *Server) routes() {
 	m.Handle("POST /api/v1/agent/heartbeat", s.agent("protect", s.handleHeartbeat))
 	m.Handle("POST /api/v1/agent/audit", s.agent("protect", s.handleAuditUpload))
 	m.Handle("POST /api/v1/agent/grants", s.agent("protect", s.handleGrantReport))
+	m.Handle("GET /api/v1/agent/upgrade", s.agent("protect", s.handleUpgrade))
+	m.Handle("GET /api/v1/agent/upgrade/download", s.agent("protect", s.handleUpgradeDownload))
 	m.Handle("GET /api/v1/agent/stream", s.agent("protect", s.handleStream))
 
 	m.Handle("GET /api/v1/overview", s.admin(s.handleOverview))
@@ -209,6 +253,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	go func() {
 		<-ctx.Done()
+		s.stopOnce.Do(func() { close(s.stop) })
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)

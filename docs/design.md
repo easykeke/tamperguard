@@ -1,6 +1,6 @@
 # TamperGuard 技术设计
 
-> 文档状态：2026-11-25。P0 已落地：三端入口（`cmd/tg-server`、`cmd/tg-agent`、`cmd/tg-publish`）、核心包（`internal/token`、`internal/policy`、`internal/audit`，有单测）、控制面（REST、SQLite、mTLS、策略签名、15 秒心跳、审计链校验）、eBPF LSM 执行器代码（`bpf/tg_protect.bpf.c` 与 `internal/enforcer/ebpf_linux.go`：13 个 hook、inode 保护集合、grant map、ringbuf）以及用户态全链路 e2e（`test/e2e/e2e-sim.sh`）。执行器已在 Linux 6.6（WSL2，bpf LSM 启用）上完成真实阻断验证：`TestEBPFLSMEnforcement` 全部通过，`test/e2e/e2e-ebpf.sh` 全链路通过（webshell 写入 EPERM、发布放行、吊销后拒绝、审计验链通过）；仍标注“待补”的是 hook 覆盖缺口。fanotify 降级（检测+回滚+周期巡检）已实现并通过端到端验证；RASP 属于 P4，未实现。
+> 文档状态：2026-11-25。P0 已落地：三端入口（`cmd/tg-server`、`cmd/tg-agent`、`cmd/tg-publish`）、核心包（`internal/token`、`internal/policy`、`internal/audit`，有单测）、控制面（REST、SQLite、mTLS、策略签名、15 秒心跳、审计链校验）、eBPF LSM 执行器代码（`bpf/tg_protect.bpf.c` 与 `internal/enforcer/ebpf_linux.go`：13 个 hook、inode 保护集合、grant map、ringbuf）以及用户态全链路 e2e（`test/e2e/e2e-sim.sh`）。执行器已在 Linux 6.6（WSL2，bpf LSM 启用）上完成真实阻断验证：`TestEBPFLSMEnforcement` 全部通过，`test/e2e/e2e-ebpf.sh` 全链路通过（webshell 写入 EPERM、发布放行、吊销后拒绝、审计验链通过）；仍标注“待补”的是 hook 覆盖缺口。fanotify 降级（检测+回滚+周期巡检）已实现并通过端到端验证；Agent 签名自升级通道（Ed25519 manifest + 哈希校验 + 原子替换）已实现并验证；RASP 已落地 Node.js 第一版（观察优先、策略热切换、审计接入），Java/PHP 待做。
 
 ## 1. 设计目标与非目标
 
@@ -21,7 +21,7 @@ TamperGuard 面向 Linux 主机上的网页目录与发布产物，解决“未�
 | 非目标 | 原因或边界 |
 |---|---|
 | 不防 root | 拿到 root 的攻击者可以杀进程、卸载 BPF 程序、改策略文件、读 Agent 私钥。详见 `docs/threat-model.md`。 |
-| 不做应用层 RASP | Phase 4 规划，当前版本没有 RASP。任何“应用层防护”的表述在 P0–P3 都不成立。 |
+| RASP 只覆盖 Node.js | 当前 RASP 探针是 Node.js 版本（`rasp/node/tamperguard.js`），Java/PHP 运行时尚未提供；其它语言的应用层防护不成立。 |
 | 不做恶意内容检测 | 不判断发布内容是否安全，只判断“写入者是否被授权、内容是否与已批准摘要一致”。 |
 | 不做网络侧防护 | 不替代 WAF、IPS、EDR；不阻断 webshell 的网络回连与横向移动。 |
 | 不承诺覆盖网络文件系统 | NFS/CIFS 上内核钩子与 fanotify 的支持都有限，见第 10 节。 |
@@ -703,6 +703,6 @@ sudo go test ./internal/enforcer -run NO_TESTS -bench . -benchtime=2000x
 | P1 内核主阻断完善 | mmap 父目录、link 源 inode、单文件规则 unlink/rename、observe 接线、SSE 推送与授权确认、新建子树的内核继承（d_instantiate）、性能基准均已完成；5.10 兼容待做 | 基本完成 | 5.10 与 6.6 至少各验证一次 |
 | P2 降级恢复 | fanotify 检测+回滚、基线、周期巡检、审批流、降级标红已完成；队列溢出处理与崩溃窗口恢复待补 | 基本完成 | `test/e2e/e2e-fanotify.sh` 通过 |
 | P3 容器与规模化 | overlayfs/容器场景已验证（`TestOverlayEnforcement`），部署形态齐备，审计导出已实现；多节点规模、审计保留与归档、自升级签名未做 | 部分完成 | 容器边界清单见第 9.2 节，不靠推断 |
-| P4 RASP | 运行期应用层防护 | 未实现，范围未定 | 另行立项评估，本文不承诺任何应用层能力 |
+| P4 RASP | 运行期应用层防护 | Node.js 探针已实现（observe/ enforce 按路径切换、审计接入、e2e 通过）；Java/PHP 探针待做 | Node.js 场景可用；其它运行时另行评估 |
 
 路线中的顺序不是强制的，但以下表述边界必须遵守：eBPF 执行器未在目标内核验证前，不能写“已实测拦截”；hook 矩阵未完整覆盖前，不能写“所有写入原语已覆盖”；P4 未实现前，不能出现“应用层防护”。

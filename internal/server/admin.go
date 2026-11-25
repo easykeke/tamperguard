@@ -513,13 +513,17 @@ func (s *Server) handleAuditVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := audit.NewVerifier(pub)
-	if _, err := v.VerifyAll(id, recs); err != nil {
+	fromSeq, err := v.VerifyRange(recs)
+	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok": false, "records": len(recs), "error": err.Error(),
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "records": len(recs)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "records": len(recs), "from_seq": fromSeq,
+		"note": "verification starts at the oldest stored record; earlier records may have been purged by retention",
+	})
 }
 
 // ---------- helpers ----------

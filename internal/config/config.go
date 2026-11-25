@@ -31,14 +31,16 @@ const (
 
 // Key file names inside <dataDir>/keys.
 const (
-	CACertFile     = "ca.crt"
-	CAKeyFile      = "ca.key"
-	ServerCertFile = "server.crt"
-	ServerKeyFile  = "server.key"
-	TokenSignFile  = "token-signing.key"
-	PolicySignFile = "policy-signing.key"
-	IssuerPubFile  = "token-signing.pub"
-	PolicyPubFile  = "policy-signing.pub"
+	CACertFile      = "ca.crt"
+	CAKeyFile       = "ca.key"
+	ServerCertFile  = "server.crt"
+	ServerKeyFile   = "server.key"
+	TokenSignFile   = "token-signing.key"
+	PolicySignFile  = "policy-signing.key"
+	IssuerPubFile   = "token-signing.pub"
+	PolicyPubFile   = "policy-signing.pub"
+	ReleaseSignFile = "release-signing.key"
+	ReleasePubFile  = "release-signing.pub"
 )
 
 // Server is the control plane configuration stored as <dataDir>/server.json.
@@ -51,6 +53,10 @@ type Server struct {
 	HeartbeatSeconds  int    `json:"heartbeat_seconds"`
 	TokenTTLSeconds   int    `json:"token_ttl_seconds"`
 	MaxTokenTTL       int    `json:"max_token_ttl_seconds"`
+	// AuditRetentionDays purges audit records older than this many days.
+	// Zero keeps everything; the default is "keep", because audit records are
+	// evidence.
+	AuditRetentionDays int `json:"audit_retention_days"`
 }
 
 // DefaultServer returns a config with sane defaults applied.
@@ -136,8 +142,9 @@ type AgentState struct {
 	CertPEM     string `json:"cert_pem"`
 	KeyPEM      string `json:"key_pem"` // never leaves the host
 	CACertPEM   string `json:"ca_cert_pem"`
-	IssuerPub   string `json:"issuer_public_key"` // hex
-	PolicyPub   string `json:"policy_public_key"` // hex
+	IssuerPub   string `json:"issuer_public_key"`  // hex
+	PolicyPub   string `json:"policy_public_key"`  // hex
+	ReleasePub  string `json:"release_public_key"` // hex
 	Enforcer    string `json:"enforcer"`
 	PolicyID    string `json:"policy_id"`
 	PublishDir  string `json:"publish_dir,omitempty"`

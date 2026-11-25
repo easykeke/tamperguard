@@ -25,6 +25,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/audit"
 	"github.com/easykeke/tamperguard/internal/config"
 	"github.com/easykeke/tamperguard/internal/policy"
+	"github.com/easykeke/tamperguard/internal/release"
 	"github.com/easykeke/tamperguard/internal/store"
 )
 
@@ -268,6 +269,51 @@ func (c *Client) PublishReady(ctx context.Context, id string) (bool, error) {
 	return out.Ready, nil
 }
 
+// ---------- self upgrade ----------
+
+// UpgradeInfo is the control plane's answer to an upgrade check.
+type UpgradeInfo struct {
+	Available bool             `json:"available"`
+	Current   string           `json:"current"`
+	Manifest  release.Manifest `json:"manifest"`
+}
+
+// UpgradeInfo asks whether a newer signed build exists for this platform.
+func (c *Client) UpgradeInfo(ctx context.Context, current, osName, arch string) (*UpgradeInfo, error) {
+	q := url.Values{}
+	q.Set("current", current)
+	q.Set("os", osName)
+	q.Set("arch", arch)
+	var out UpgradeInfo
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agent/upgrade?"+q.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DownloadUpgrade streams the artefact into w and returns the byte count.
+func (c *Client) DownloadUpgrade(ctx context.Context, m release.Manifest, w io.Writer) (int64, error) {
+	q := url.Values{}
+	q.Set("version", m.Version)
+	q.Set("os", m.OS)
+	q.Set("arch", m.Arch)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.base+"/api/v1/agent/upgrade/download?"+q.Encode(), nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return 0, &APIError{Status: resp.StatusCode, Body: string(raw)}
+	}
+	return io.Copy(w, resp.Body)
+}
+
 // ---------- enrolment ----------
 
 // EnrollOptions configures first-time enrolment.
@@ -413,6 +459,7 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*config.AgentState, error)
 		CACertPEM:     er.CAPEM,
 		IssuerPub:     er.AgentConfig["issuer_public_key"],
 		PolicyPub:     er.AgentConfig["policy_public_key"],
+		ReleasePub:    er.AgentConfig["release_public_key"],
 		PublishDir:    opts.PublishDir,
 		PollSeconds:   poll,
 		PublisherUIDs: opts.PublisherUIDs,

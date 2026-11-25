@@ -19,7 +19,21 @@ import (
 	"github.com/easykeke/tamperguard/internal/config"
 	"github.com/easykeke/tamperguard/internal/enforcer"
 	"github.com/easykeke/tamperguard/internal/policy"
+	"github.com/easykeke/tamperguard/internal/rasp"
 )
+
+// Options tunes agent behaviour.
+type Options struct {
+	Logger *slog.Logger
+	// AutoUpgrade enables the signed self-upgrade channel.
+	AutoUpgrade bool
+	// UpgradeInterval controls how often the channel is polled.
+	UpgradeInterval time.Duration
+	// RASP enables the application-layer probe socket.
+	RASP bool
+	// RASPSocket overrides the probe socket path (default <stateDir>/rasp.sock).
+	RASPSocket string
+}
 
 // Agent is the protect-side runtime: it syncs policy, feeds the enforcer and
 // ships a tamper-evident audit chain to the control plane.
@@ -30,6 +44,8 @@ type Agent struct {
 	log    *slog.Logger
 	writer *audit.Writer
 	file   *os.File
+	opts   Options
+	rasp   *rasp.Server
 
 	mu           sync.Mutex
 	pending      []audit.Record
@@ -37,12 +53,16 @@ type Agent struct {
 	unhealthy    bool
 	reported     []string // grant token IDs last reported to the control plane
 	wake         chan struct{}
+	upgradeReady chan struct{}
 }
 
 // New builds an agent from persisted state.
-func New(state *config.AgentState, enf enforcer.Enforcer, logger *slog.Logger) (*Agent, error) {
-	if logger == nil {
-		logger = slog.Default()
+func New(state *config.AgentState, enf enforcer.Enforcer, opts Options) (*Agent, error) {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	if opts.AutoUpgrade && opts.UpgradeInterval <= 0 {
+		opts.UpgradeInterval = 6 * time.Hour
 	}
 	priv, err := parsePrivateKey(state.KeyPEM)
 	if err != nil {
@@ -61,8 +81,22 @@ func New(state *config.AgentState, enf enforcer.Enforcer, logger *slog.Logger) (
 		f.Close()
 		return nil, err
 	}
-	return &Agent{state: state, client: client, enf: enf, log: logger, writer: writer, file: f,
-		wake: make(chan struct{}, 1)}, nil
+	a := &Agent{state: state, client: client, enf: enf, log: opts.Logger, writer: writer, file: f,
+		opts: opts, wake: make(chan struct{}, 1), upgradeReady: make(chan struct{}, 1)}
+	if opts.RASP {
+		socket := opts.RASPSocket
+		if socket == "" {
+			socket = filepath.Join(state.StateDir, "rasp.sock")
+		}
+		srv, err := rasp.New(socket, a.onRASPEvent, opts.Logger)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("agent: start rasp probe socket: %w", err)
+		}
+		a.rasp = srv
+		a.log.Info("rasp probe socket listening", "socket", socket)
+	}
+	return a, nil
 }
 
 func parsePrivateKey(keyPEM string) (ed25519.PrivateKey, error) {
@@ -106,6 +140,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	// optimisation only -- the heartbeat remains the source of truth.
 	go a.streamLoop(ctx)
 
+	// Signed self-upgrade channel. When a new binary is staged the loop stops
+	// so the service manager can restart into it.
+	if a.opts.AutoUpgrade {
+		go a.upgradeLoop(ctx)
+	}
+
 	// First sync immediately so a restart applies the current policy fast.
 	a.tick(ctx)
 
@@ -120,6 +160,41 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.tick(ctx)
 		case <-a.wake:
 			a.tick(ctx)
+		case <-a.upgradeReady:
+			a.shutdown()
+			return ErrUpgradeStaged
+		}
+	}
+}
+
+// upgradeLoop polls the signed upgrade channel.
+func (a *Agent) upgradeLoop(ctx context.Context) {
+	interval := a.opts.UpgradeInterval
+	if interval <= 0 {
+		return
+	}
+	check := func() {
+		staged, err := MaybeUpgrade(ctx, a.state, a.client, a.log, Version)
+		if err != nil {
+			a.log.Warn("upgrade check failed", "err", err)
+			return
+		}
+		if staged {
+			select {
+			case a.upgradeReady <- struct{}{}:
+			default:
+			}
+		}
+	}
+	check()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			check()
 		}
 	}
 }
@@ -224,6 +299,7 @@ func (a *Agent) sync(ctx context.Context) error {
 		a.record(audit.KindEnforcerError, "", "enforcer update failed: "+err.Error())
 		return nil
 	}
+	a.pushRASPRules(snap)
 
 	newDigest := ""
 	if snap != nil {
@@ -401,10 +477,54 @@ func (a *Agent) flush(ctx context.Context) error {
 	return nil
 }
 
+// pushRASPRules delivers the current protection rules to connected probes.
+func (a *Agent) pushRASPRules(snap *policy.Snapshot) {
+	if a.rasp == nil {
+		return
+	}
+	rules := []rasp.Rule{}
+	if snap != nil {
+		for _, p := range snap.Policy.Paths {
+			rules = append(rules, rasp.Rule{Path: p.Path, Recursive: p.Recursive, Mode: string(p.Mode)})
+		}
+	}
+	a.rasp.UpdateRules(rules)
+}
+
+// onRASPEvent records one probe decision in the audit chain.
+func (a *Agent) onRASPEvent(ev rasp.Event) {
+	kind := audit.KindRASPObserved
+	decision := "observe"
+	if ev.Decision == "blocked" {
+		kind = audit.KindRASPBlocked
+		decision = "deny"
+	}
+	detail := ev.Stack
+	if len(detail) > 512 {
+		detail = detail[:512]
+	}
+	r, err := a.writer.Append(audit.Record{
+		Kind:     kind,
+		Path:     ev.Path,
+		Op:       ev.Op,
+		Subject:  fmt.Sprintf("rasp pid:%d app:%s", ev.PID, ev.App),
+		Decision: decision,
+		Detail:   detail,
+	})
+	if err != nil {
+		a.log.Error("rasp audit append failed", "err", err)
+		return
+	}
+	a.enqueue(r)
+}
+
 func (a *Agent) shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = a.flush(ctx)
+	if a.rasp != nil {
+		_ = a.rasp.Close()
+	}
 	_ = a.enf.Close()
 	if a.file != nil {
 		_ = a.file.Sync()

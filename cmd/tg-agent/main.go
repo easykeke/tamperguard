@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/easykeke/tamperguard/internal/agent"
 	"github.com/easykeke/tamperguard/internal/config"
@@ -33,6 +35,8 @@ func main() {
 		err = cmdEnroll(os.Args[2:])
 	case "run":
 		err = cmdRun(os.Args[2:])
+	case "probe":
+		err = cmdProbe(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -51,7 +55,8 @@ func usage() {
 	fmt.Fprint(os.Stderr, `TamperGuard protection agent
 
   tg-agent enroll --server URL --bootstrap TOKEN --ca FILE [--role protect] [--state-dir DIR]
-  tg-agent run    [--state-dir DIR]
+  tg-agent run    [--state-dir DIR] [--enforcer auto|ebpf|fanotify|observe]
+  tg-agent probe  [--state-dir DIR]
 `)
 }
 
@@ -105,10 +110,28 @@ func parseIntList(s string) []int {
 	return out
 }
 
+// cmdProbe prints which enforcement backend this host supports and why the
+// stronger ones are unavailable. Run it before rolling an agent out.
+func cmdProbe(args []string) error {
+	fs := flag.NewFlagSet("probe", flag.ExitOnError)
+	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory (baseline location)")
+	_ = fs.Parse(args)
+	rep := enforcer.Probe(*stateDir)
+	fmt.Print(enforcer.FormatProbe(rep))
+	if hint := enforcer.SecurityFSMountHint(); hint != "" {
+		fmt.Printf("securityfs    : %s\n", hint)
+	}
+	return nil
+}
+
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
 	backend := fs.String("enforcer", "auto", "enforcement backend: auto, ebpf, fanotify or observe")
+	autoUpgrade := fs.Bool("auto-upgrade", true, "accept signed agent updates")
+	upgradeInterval := fs.Duration("upgrade-interval", 6*time.Hour, "how often to check for updates")
+	raspEnabled := fs.Bool("rasp", true, "serve the application-layer probe socket")
+	raspSocket := fs.String("rasp-socket", "", "override the probe socket path")
 	_ = fs.Parse(args)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -130,11 +153,24 @@ func cmdRun(args []string) error {
 		logger.Warn("running with degraded protection", "enforcer", capb.Kind, "reason", capb.Reason)
 	}
 
-	a, err := agent.New(state, enf, logger)
+	a, err := agent.New(state, enf, agent.Options{
+		Logger:          logger,
+		AutoUpgrade:     *autoUpgrade,
+		UpgradeInterval: *upgradeInterval,
+		RASP:            *raspEnabled,
+		RASPSocket:      *raspSocket,
+	})
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return a.Run(ctx)
+	if err := a.Run(ctx); err != nil {
+		if errors.Is(err, agent.ErrUpgradeStaged) {
+			logger.Info("agent binary upgraded; service manager should restart the process")
+			return nil
+		}
+		return err
+	}
+	return nil
 }

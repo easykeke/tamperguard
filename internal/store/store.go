@@ -27,6 +27,50 @@ type Store struct {
 	db *sql.DB
 }
 
+// Release is one published agent build.
+type Release struct {
+	Version     string `json:"version"`
+	OS          string `json:"os"`
+	Arch        string `json:"arch"`
+	SHA256      string `json:"sha256"`
+	Size        int64  `json:"size"`
+	PublishedAt int64  `json:"published_at"`
+}
+
+// UpsertRelease records a published build.
+func (s *Store) UpsertRelease(r Release) error {
+	_, err := s.db.Exec(`INSERT INTO releases (version, os, arch, sha256, size, published_at)
+		VALUES (?,?,?,?,?,?)
+		ON CONFLICT(version, os, arch) DO UPDATE SET
+			sha256=excluded.sha256, size=excluded.size, published_at=excluded.published_at`,
+		r.Version, r.OS, r.Arch, r.SHA256, r.Size, r.PublishedAt)
+	return err
+}
+
+// GetRelease returns one published build.
+func (s *Store) GetRelease(version, osName, arch string) (Release, error) {
+	var r Release
+	err := s.db.QueryRow(`SELECT version, os, arch, sha256, size, published_at
+		FROM releases WHERE version=? AND os=? AND arch=?`, version, osName, arch).
+		Scan(&r.Version, &r.OS, &r.Arch, &r.SHA256, &r.Size, &r.PublishedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Release{}, ErrNotFound
+	}
+	return r, err
+}
+
+// LatestRelease returns the newest published build for a platform.
+func (s *Store) LatestRelease(osName, arch string) (Release, error) {
+	var r Release
+	err := s.db.QueryRow(`SELECT version, os, arch, sha256, size, published_at
+		FROM releases WHERE os=? AND arch=? ORDER BY published_at DESC LIMIT 1`, osName, arch).
+		Scan(&r.Version, &r.OS, &r.Arch, &r.SHA256, &r.Size, &r.PublishedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Release{}, ErrNotFound
+	}
+	return r, err
+}
+
 // Node is a registered protect or publish agent.
 type Node struct {
 	ID               string          `json:"id"`
@@ -245,6 +289,15 @@ func (s *Store) migrate() error {
 			role TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
 			used_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS releases (
+			version TEXT NOT NULL,
+			os TEXT NOT NULL,
+			arch TEXT NOT NULL,
+			sha256 TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			published_at INTEGER NOT NULL,
+			PRIMARY KEY (version, os, arch)
 		)`,
 	}
 	for _, q := range stmts {
@@ -789,6 +842,16 @@ func (s *Store) ListChainStates() ([]ChainStateRow, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// PurgeAuditBefore deletes audit records older than cutoff and returns how many
+// rows were removed.
+func (s *Store) PurgeAuditBefore(cutoff int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM audit_records WHERE ts < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ListAudit returns records newest first.

@@ -96,3 +96,29 @@ func TestWriterOutputIsJSONLines(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyRangeAllowsPurgedHead(t *testing.T) {
+	pub, _, _, recs := newChain(t)
+	v := NewVerifier(pub)
+
+	// Simulate retention: the oldest record is gone, the rest must still verify.
+	fromSeq, err := v.VerifyRange(recs[1:])
+	if err != nil {
+		t.Fatalf("verify range: %v", err)
+	}
+	if fromSeq != 2 {
+		t.Fatalf("from_seq = %d, want 2", fromSeq)
+	}
+
+	// A gap inside the range is still an error.
+	if _, err := v.VerifyRange([]Record{recs[0], recs[2]}); !errors.Is(err, ErrSequence) {
+		t.Fatalf("want ErrSequence for a gap, got %v", err)
+	}
+
+	// Tampering inside the range is still detected.
+	tampered := append([]Record(nil), recs[1:]...)
+	tampered[0].Path = "/var/www/evil"
+	if _, err := v.VerifyRange(tampered); !errors.Is(err, ErrHash) {
+		t.Fatalf("want ErrHash for tampered record, got %v", err)
+	}
+}

@@ -41,6 +41,10 @@ const (
 	KindAgentHeartbeat = "agent.heartbeat"
 	KindPublishDone    = "publish.completed"
 	KindPublishFailed  = "publish.failed"
+	// RASP events come from the application-layer probe (runtime writes by a
+	// legitimate process that the kernel layer would allow).
+	KindRASPBlocked  = "rasp.blocked"
+	KindRASPObserved = "rasp.observed"
 )
 
 var (
@@ -248,6 +252,33 @@ func (v *Verifier) VerifyAll(agentID string, records []Record) (*ChainState, err
 		}
 	}
 	return st, nil
+}
+
+// VerifyRange validates a stored range whose head may have been purged by a
+// retention policy. It checks every signature, every hash and every link inside
+// the range, but adopts the first record's sequence and prev-hash as the
+// starting point instead of requiring them to be 1/empty.
+//
+// A gap inside the range is still an error; only the truncation of the oldest
+// records is allowed.
+func (v *Verifier) VerifyRange(records []Record) (fromSeq uint64, err error) {
+	if len(records) == 0 {
+		return 0, nil
+	}
+	for i, r := range records {
+		if err := r.VerifySeal(v.pub); err != nil {
+			return 0, err
+		}
+		if i > 0 {
+			if r.Seq != records[i-1].Seq+1 {
+				return 0, fmt.Errorf("%w: expected seq %d, got %d", ErrSequence, records[i-1].Seq+1, r.Seq)
+			}
+			if r.PrevHash != records[i-1].Hash {
+				return 0, fmt.Errorf("%w: prev %q != %q", ErrPrevHash, r.PrevHash, records[i-1].Hash)
+			}
+		}
+	}
+	return records[0].Seq, nil
 }
 
 func equalHex(a, b string) bool {
