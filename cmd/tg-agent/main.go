@@ -108,7 +108,7 @@ func parseIntList(s string) []int {
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
-	backend := fs.String("enforcer", "auto", "enforcement backend: auto, ebpf or observe")
+	backend := fs.String("enforcer", "auto", "enforcement backend: auto, ebpf, fanotify or observe")
 	_ = fs.Parse(args)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -118,7 +118,10 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	enf, err := enforcer.SelectKind(*backend, enforcer.Options{PublisherUIDs: state.PublisherUIDs})
+	enf, err := enforcer.SelectKind(*backend, enforcer.Options{
+		PublisherUIDs: state.PublisherUIDs,
+		StateDir:      *stateDir,
+	})
 	if err != nil {
 		return err
 	}

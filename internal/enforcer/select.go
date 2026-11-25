@@ -8,6 +8,8 @@ type Options struct {
 	// grant. The kernel sees uids, not agent identities, so the mapping from
 	// "publisher agent" to "operating system user" is explicit configuration.
 	PublisherUIDs []int
+	// StateDir is where the degraded backend keeps its baseline copies.
+	StateDir string
 }
 
 // Select returns the strongest enforcement backend available in this build.
@@ -37,7 +39,13 @@ func SelectKind(kind string, opts Options) (Enforcer, error) {
 			return e, nil
 		}
 		return nil, ErrNoBackend
+	case "fanotify":
+		f, err := NewFanotify(opts.StateDir, opts.PublisherUIDs)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
 	default:
-		return nil, fmt.Errorf("enforcer: unknown backend %q (want auto, ebpf or observe)", kind)
+		return nil, fmt.Errorf("enforcer: unknown backend %q (want auto, ebpf, fanotify or observe)", kind)
 	}
 }

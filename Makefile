@@ -29,9 +29,20 @@ vmlinux:
 test:
 	$(GO) test ./...
 
-## e2e: full pipeline smoke test (Linux, run as root)
-e2e:
+## e2e: userspace pipeline smoke test (Linux, run as root)
+e2e: e2e-sim
+
+## e2e-sim: full pipeline with the observe backend
+e2e-sim:
 	bash test/e2e/e2e-sim.sh
+
+## e2e-ebpf: real kernel enforcement; needs a kernel with bpf in the LSM list
+e2e-ebpf:
+	bash test/e2e/e2e-ebpf.sh
+
+## e2e-fanotify: degraded detect-and-restore path; needs CONFIG_FANOTIFY + root
+e2e-fanotify:
+	bash test/e2e/e2e-fanotify.sh
 
 ## vet: static checks
 vet:

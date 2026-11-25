@@ -1,6 +1,6 @@
 # TamperGuard 技术设计
 
-> 文档状态：2026-11-25。P0 已落地：三端入口（`cmd/tg-server`、`cmd/tg-agent`、`cmd/tg-publish`）、核心包（`internal/token`、`internal/policy`、`internal/audit`，有单测）、控制面（REST、SQLite、mTLS、策略签名、15 秒心跳、审计链校验）、eBPF LSM 执行器代码（`bpf/tg_protect.bpf.c` 与 `internal/enforcer/ebpf_linux.go`：13 个 hook、inode 保护集合、grant map、ringbuf）以及用户态全链路 e2e（`test/e2e/e2e-sim.sh`）。执行器已在 Linux 6.6（WSL2，bpf LSM 启用）上完成真实阻断验证：`TestEBPFLSMEnforcement` 全部通过，`test/e2e/e2e-ebpf.sh` 全链路通过（webshell 写入 EPERM、发布放行、吊销后拒绝、审计验链通过）；仍标注“待补”的是 hook 覆盖缺口。fanotify 降级与事件恢复属于 P2，未实现；RASP 属于 P4，未实现。
+> 文档状态：2026-11-25。P0 已落地：三端入口（`cmd/tg-server`、`cmd/tg-agent`、`cmd/tg-publish`）、核心包（`internal/token`、`internal/policy`、`internal/audit`，有单测）、控制面（REST、SQLite、mTLS、策略签名、15 秒心跳、审计链校验）、eBPF LSM 执行器代码（`bpf/tg_protect.bpf.c` 与 `internal/enforcer/ebpf_linux.go`：13 个 hook、inode 保护集合、grant map、ringbuf）以及用户态全链路 e2e（`test/e2e/e2e-sim.sh`）。执行器已在 Linux 6.6（WSL2，bpf LSM 启用）上完成真实阻断验证：`TestEBPFLSMEnforcement` 全部通过，`test/e2e/e2e-ebpf.sh` 全链路通过（webshell 写入 EPERM、发布放行、吊销后拒绝、审计验链通过）；仍标注“待补”的是 hook 覆盖缺口。fanotify 降级（检测+回滚+周期巡检）已实现并通过端到端验证；RASP 属于 P4，未实现。
 
 ## 1. 设计目标与非目标
 
@@ -10,7 +10,7 @@ TamperGuard 面向 Linux 主机上的网页目录与发布产物，解决“未�
 
 | 优先级 | 目标 | 说明 |
 |---|---|---|
-| 1 | 内核层同步阻断 | 在写入发生前拒绝，而不是事后发现。P0 主路径是 eBPF LSM；加载失败时回退 observe（不阻断，真实写入不自动记录）并标记降级。fanotify 是 P2 的降级设计。 |
+| 1 | 内核层同步阻断 | 在写入发生前拒绝，而不是事后发现。P0 主路径是 eBPF LSM；加载失败时依次回退 fanotify（检测+回滚）与 observe（只记录），降级状态显式上报。 |
 | 2 | 发布写入可授权 | 只有发布端 Agent 凭短时效令牌、且写入内容与已提交 manifest 的 SHA-256 摘要一致，才允许落盘。 |
 | 3 | 审计可校验 | 每条审计记录带 seq、prev hash、自身 hash 与 Ed25519 签名，服务端逐条验链并在缺口/分叉时告警。 |
 | 4 | 能力降级可解释 | 内核不支持 eBPF LSM 时降级到 fanotify，降级状态必须显式暴露，不能静默变成“看起来在防护”。 |
@@ -70,7 +70,7 @@ TamperGuard 面向 Linux 主机上的网页目录与发布产物，解决“未�
 | 组件 | 职责 | 明确不负责 |
 |---|---|---|
 | `tg-server` | 管理端 HTTP 服务；REST API；面向 Agent/发布端的 mTLS 接入；SQLite 持久化；CA 与身份签发；策略快照 Ed25519 签名；发布令牌签发与吊销；审计链接收、验链、缺口告警；心跳响应与 SSE 推送（`GET /api/v1/agent/stream`）中的策略、grant 与撤销下发。 | 不执行任何文件系统拦截；不接触发布内容明文（只收 manifest 摘要与审计记录）。 |
-| `tg-agent` | 受保护主机上的 root 守护进程：能力探测、策略同步与验签、eBPF LSM 执行（P0，代码已落地，待内核验证）/ observe 回退 / fanotify 降级（P2）、grant 与撤销校验、审计链记录与上报、15 秒心跳。 | 不存储发布内容；不做内容安全判断；容器内不可运行。 |
+| `tg-agent` | 受保护主机上的 root 守护进程：能力探测、策略同步与验签、eBPF LSM 执行 / fanotify 降级（检测+回滚）/ observe 回退、grant 与撤销校验、审计链记录与上报、15 秒心跳。 | 不存储发布内容；不做内容安全判断；容器内不可运行。 |
 | `tg-publish` | 发布端 Agent：持有 mTLS 身份，拉取分配给自己的发布申请，遍历源码树计算 manifest，向服务端申请短时效令牌并持有，逐文件复核哈希后写入，上报完成状态。 | 浏览器永远不接触令牌；发布端不自行延长令牌有效期；不绕过目标节点的执行层写文件。 |
 
 ### 2.3 部署约束
@@ -174,7 +174,7 @@ web/                    管理端静态资源（P0，实际目录名以实现为
 
 | 类型 | 识别方式 | 说明 |
 |---|---|---|
-| 发布端 Agent（`publisher`） | mTLS 身份 + 令牌 + 目标节点上的 grant + 内核侧写入 uid | 正常发布通道。grant 在用户态校验后展开成内核 map 的 `(uid, dev, inode)` 授权；可消费 grant 的 uid 由 `tg-agent enroll --publisher-uids` 配置，默认 `0`（演示方便，生产必须改成发布端专用 uid）。fanotify 降级是 P2。 |
+| 发布端 Agent（`publisher`） | mTLS 身份 + 令牌 + 目标节点上的 grant + 内核侧写入 uid | 正常发布通道。grant 在用户态校验后展开成内核 map 的 `(uid, dev, inode)` 授权；可消费 grant 的 uid 由 `tg-agent enroll --publisher-uids` 配置，默认 `0`（演示方便，生产必须改成发布端专用 uid）。fanotify 降级为检测+回滚，能力明显弱于 eBPF LSM。 |
 | 登记进程（`process`） | `exe_path`（可加 `uid`） | 策略例外，例如本机 rsync、备份程序。每一条都应被视为例外，管理端单独展示。当前 eBPF 后端尚未使用该规则：受保护路径上只有 grant 能放行，process 规则在 eBPF 节点上不生效（待补）。 |
 | 其他进程 | 不匹配任何白名单 | 受保护路径上的一律拒绝。 |
 
@@ -271,7 +271,7 @@ P0 实现（本轮）：
 - eBPF LSM 执行器代码已落地：13 个 hook（`file_permission`、`file_open`、`inode_permission`、`inode_create/mkdir/unlink/rmdir/rename/link/setattr/setxattr`、`mmap_file`、`file_mprotect`）attach 成功后启用；任一 attach 失败整体回退 observe。
 - 内核侧可识别的写入主体是 uid（exe 路径只能作为附加条件）。发布端以专用 uid 运行，该 uid 由 `tg-agent enroll --publisher-uids` 写入 Agent 状态，默认 `0`。令牌/grant 在用户态校验后展开为内核 map 的 `(uid, dev, inode)` + 到期时间授权，目录授权覆盖目录内新建操作。
 - 真实阻断已在 Linux 6.6 + bpf LSM 上实测：受保护写入返回 EPERM、读放行、新建与删除被拒、令牌授权可写、撤权后再次被拒；其他内核版本与文件系统仍需分别验证。
-- fanotify 降级与事件恢复是 P2，当前未实现。
+- fanotify 降级（检测+回滚+周期巡检）已实现，能力边界见第 6 节。
 - 发布端与被保护节点同机是 P0 唯一端到端流程。跨机传输不在代码里，需要部署侧 rsync/SSH/共享存储等外部通道，当前未实现。
 
 后续版本：
@@ -287,7 +287,7 @@ P0 实现（本轮）：
 
 | 前提 | 检查方式 | 不满足时 |
 |---|---|---|
-| 内核 ≥ 5.10（推荐 6.1+） | `uname -r` | 回退 observe；P2 之后可降级 fanotify |
+| 内核 ≥ 5.10（推荐 6.1+） | `uname -r` | 回退 fanotify（检测+回滚）或 observe |
 | `CONFIG_BPF_LSM=y` | 内核配置或 `/sys/kernel/security/lsm` 含 `bpf` | 回退 observe |
 | LSM 列表包含 bpf | `cat /sys/kernel/security/lsm`，必要时 `lsm=...,bpf` 启动参数 | 回退 observe，需重启换内核 |
 | BTF/CO-RE | `/sys/kernel/btf/vmlinux` 存在 | 回退 observe |
@@ -297,7 +297,7 @@ P0 实现（本轮）：
 
 1. 探测能力，结果写入心跳的 `caps` 字段。
 2. 加载嵌入的 CO-RE 目标文件，逐 hook attach。
-3. 任一 hook attach 失败：卸载已挂载程序，整体回退 observe（P2 之后为 fanotify），记录 `enforcer.degraded`，不允许部分生效。
+3. 任一 hook attach 失败：卸载已挂载程序，整体回退 fanotify，记录 `enforcer.degraded`，不允许部分生效。
 4. 从已验签策略填充 map，启动 ringbuf 事件消费者。
 5. 自检通过后上报 `enforcer=ebpf-lsm`；之后每隔心跳周期检查 link 与 map 状态。
 
@@ -406,7 +406,7 @@ BPF hook 拿到的是 dentry、inode、file、vma。执行器当前方向是按 
 
 | 故障 | 处理 |
 |---|---|
-| 程序加载/attach 失败 | 整体回退 observe（P2 之后为 fanotify），上报 `enforcer.degraded`，管理端标红 |
+| 程序加载/attach 失败 | 整体回退 fanotify，上报 `enforcer.degraded`，管理端标红 |
 | ringbuf 消费失败或事件丢失 | 内核判定不受影响；用户态记录 `enforcer.error`，通过心跳暴露，审计缺口按链状态告警 |
 | inode 索引为空或未就绪 | 内核侧会按未保护放行；用户态必须在索引填充完成后再启用 enforcement，并在心跳里暴露索引状态（待实现） |
 | 索引刷新期间 | 新建、rename 的文件可能短暂漏拦；记录 `enforcer.error` 并告警（待实现） |
@@ -415,64 +415,68 @@ BPF hook 拿到的是 dentry、inode、file、vma。执行器当前方向是按 
 
 当前实现没有 pinned link：Agent 被杀或崩溃后，内核不再阻断，服务端要等 3 个心跳周期（45 秒）才判离线。这段时间里受保护路径实际处于放行状态，属于 P0 的已知风险。root 攻击者也可以直接 detach 或杀进程，这一点无法在内核层解决。
 
-## 6. 降级层：fanotify（P2）
+## 6. 降级层：fanotify（已实现，检测 + 回滚）
 
-本节描述 P2 的 fanotify 降级设计，当前未实现。P0 的降级策略是回退 observe（不阻断，真实写入不会自动产生审计记录）并在管理端标记 degraded；不得把 observe 当作已防护。fanotify 落地后才是“需审批的弱防护”，其能力仍明显弱于 eBPF LSM。
+fanotify 是“需审批的弱防护”，不是 eBPF LSM 的等价替代。实现上有一个必须说清楚的事实：**fanotify 的权限事件（`FAN_OPEN_PERM`）不携带 open 的标志位**，无法区分读与写；直接用它做写入判定会把正常读取也拦死。目录项事件（`FAN_CREATE`/`FAN_DELETE`/`FAN_MOVED_FROM`/`FAN_MOVED_TO`）则要求 `FAN_REPORT_FID` 组并用 `open_by_handle_at` 解析路径，依赖文件系统是否支持导出句柄。
+
+因此降级模式不是“阻断”，而是**检测 + 回滚 + 周期巡检**：
+
+| 动作 | 机制 | 时延 |
+|---|---|---|
+| 覆盖写已保护文件 | `FAN_CLOSE_WRITE` 事件 → 策略判定 → 用基线副本原子回滚 | 毫秒级 |
+| 新建文件 | 周期巡检发现基线中不存在的文件 → 删除 | 默认 30 秒（`TG_FAN_SCAN_SECONDS` 可调） |
+| 删除文件 | 周期巡检发现基线存在但磁盘缺失 → 从基线重建 | 默认 30 秒 |
+| 合法发布 | 写入 uid 在 `--publisher-uids` 且路径被有效 grant 覆盖 → 接受写入并更新基线 | 毫秒级 |
 
 ### 6.1 能力边界
 
-fanotify 是“需审批的弱防护”，不是 eBPF LSM 的等价替代：
-
 | 能力 | eBPF LSM | fanotify 降级 |
 |---|---|---|
-| open 写意图拦截 | 有 | 有（`FAN_OPEN_PERM`） |
-| 每次 write 检查 | 有（`file_permission`） | 无：已经打开的 fd 写入不被检查 |
-| truncate/chmod/xattr | 有 | 无独立 hook，只能靠 open 阶段兜 |
-| rename/unlink/link | 有 | 无权限事件可阻断（通知事件只能事后记录） |
+| 写入发生前拦截 | 有 | **没有**：写入先落盘，再被回滚 |
+| 每次 write 检查 | 有（`file_permission`） | 仅 `FAN_CLOSE_WRITE` 之后 |
+| truncate/chmod/xattr | 有 | 内容回滚；元数据变化靠巡检发现 |
+| rename/unlink/link | 有 | 事件不可得（需 FID）；靠巡检恢复 |
 | mmap 写 | 有 | 无 |
-| 判定延迟 | 内核内判定，无用户态往返 | 用户态往返，延迟受队列深度与响应实现影响，且有队列溢出风险 |
-| 审计完整性 | 事件由内核直接给出 | 用户态监听器存活才有事件 |
+| 打开但未关闭的写 fd | 下一次 write 即拒 | 关闭后才回滚 |
+| 对抗 root 主动卸载 | 不能 | 不能 |
 
-降级节点默认标记为不合规，需要管理员显式审批（`POST /nodes/{id}/degraded-approval`）。审批只表示“知悉并接受弱防护”，不改变上面的能力差异。eBPF 列是目标能力；当前实现的原语缺口见 5.2 节“已知差异”。
+降级节点默认标记为不合规，需要管理员显式审批（`POST /nodes/{id}/degraded-approval`）。审批只表示“知悉并接受弱防护”，不改变上述能力差异。
 
-### 6.2 权限事件与决策
+### 6.2 实现要点
 
-1. 以 root 初始化 fanotify group（`FAN_CLASS_CONTENT` 或 pre-content 类），对受保护路径所在挂载点/文件系统加 mark，事件类型以 `FAN_OPEN_PERM` 为主。
-2. 收到事件后取出 fd，解析真实路径，走同一套 `policy.Decide`。
-3. 允许回 `FAN_ALLOW`，拒绝回 `FAN_DENY`；拒绝的 open 返回 EPERM。
-4. 事件与判定写入审计链，kind 与 eBPF 路径一致（`write.blocked`/`write.allowed`）。
-5. 非受保护路径的事件直接放行，不进入策略判定，避免管理面开销。
+1. **基线**：策略首次下发时把受保护树快照到 `<state-dir>/baseline`（内容寻址 blob + 索引），保存内容哈希与权限位。
+2. **标记**：对受保护树内每个目录加 mark（`FAN_MODIFY|FAN_CLOSE_WRITE|FAN_ONDIR|FAN_EVENT_ON_CHILD`）。
+3. **事件处理**：`CLOSE_WRITE` 时解析 fd 路径，读取 `/proc/<pid>` 得到 uid 与 exe，走同一套 `policy.Decide`；拒绝则从基线原子回滚（临时文件 + rename），并写审计 `write.blocked`。
+4. **合法写入**：uid 在 `--publisher-uids` 且 grant 覆盖该路径 → 接受并 `Take` 新内容作为基线。
+5. **巡检**：默认 30 秒遍历一次受保护树，恢复被删除/被修改的文件、删除基线外新出现的文件；巡检时若该路径被有效 grant 覆盖则跳过，避免与发布冲突。
+6. **防自激**：回滚产生的写事件按 pid 过滤；同一路径 500ms 内只回滚一次，避免攻击者循环触发风暴。
+7. **重启**：基线持久化在磁盘索引里；mark 在每次 `Update` 时按目录重建。
 
-限制：`FAN_MODIFY` 是通知事件，不能阻断；`FAN_CLOSE_WRITE` 只能事后发现。降级模式下，已经打开的写 fd、rename、unlink、mmap 都不在阻断范围内。
+### 6.3 已知限制
 
-### 6.3 事件队列与恢复
-
-| 场景 | 处理 | 状态 |
-|---|---|---|
-| 事件队列溢出（`FAN_Q_OVERFLOW`） | 记录 `enforcer.error`，管理端告警，节点进入不可信状态；溢出后漏掉的 open 是否放行由内核行为决定 | 待验证 |
-| 监听进程重启 | 重新初始化 group 与 mark；重启窗口内的写入无法阻断，审计以缺口/告警标记 | 设计，待实现 |
-| 监听进程异常退出时挂起的 permission 事件 | 内核如何应答需实测；不能假设自动拒绝 | 待验证 |
-| 长时间无事件 | 不代表无攻击，只代表没有触发 open 权限事件；降级模式本身就不覆盖已打开 fd 与元数据操作 | 设计约束 |
-
-“事件恢复”在本文指上述队列溢出、监听进程重启、挂起事件的处置与审计标记，不表示能补回已经发生的未阻断写入。产品不提供事后回滚或内容恢复。
+| 场景 | 影响 |
+|---|---|
+| 新建/删除文件 | 最长一个巡检周期（默认 30 秒）内可见；缩短周期会增加全树哈希开销 |
+| 攻击者持有写 fd 不关闭 | 关闭前不回滚 |
+| 超大文件树 | 巡检全量哈希成本随文件数线性增长，需要按站点规模调周期，或后续改增量索引 |
+| 队列溢出（`FAN_Q_OVERFLOW`） | 尚未显式处理；漏掉的事件由巡检兜底 |
+| 监听进程崩溃 | 重启后 mark 重建；崩溃窗口内的写入由巡检恢复 |
 
 ### 6.4 审批流与合规标记
 
 - 节点首次以降级模式上线：`degraded=true`、`degraded_approved=false`，管理端标红，不计入合规统计。
-- 管理员在节点详情里显式审批，记录审批人与时间（审计 kind 待定），节点变为“已审批的降级节点”，但仍不计为与 eBPF 等价的合规状态；报表需分开展示。
-- 节点后续恢复 eBPF（换内核、修复 BTF）后重新探测，审批标记失效，回到主执行层。
-- 节点离线超过 3 个心跳周期（45 秒）标记 offline，不能继续算作“正在防护”。
+- 管理员显式审批后为“已审批的降级节点”，仍不与 eBPF 等价；报表分开展示。
+- 节点恢复 eBPF 后重新探测，审批标记失效，回到主执行层。
+- 节点离线超过 3 个心跳周期（45 秒）标记 offline。
 
-### 6.5 降级判定顺序
+### 6.5 降级判定顺序（已实现）
 
-P0 没有 fanotify：eBPF 加载失败、内核不支持或 hook 缺失时直接回退 observe，心跳上报 `enforcer=observe`、`degraded=true`。P2 完成后的判定顺序如下：
+1. eBPF LSM 加载并 attach 成功 → 主执行层。
+2. 内核版本、`CONFIG_BPF_LSM`、LSM 列表、BTF 任一不满足，或加载/attach 失败 → fanotify。
+3. fanotify 初始化也失败 → observe（只记录不阻断，不伪装成防护）。
+4. 降级原因随心跳上报（`enforcer`/`caps`/`degraded` 字段），管理端可见。
 
-1. 内核版本 < 5.10 → fanotify。
-2. `CONFIG_BPF_LSM` 未开启或 LSM 列表无 `bpf` → fanotify。
-3. BTF 缺失 → fanotify。
-4. BPF 加载/attach 失败 → fanotify。
-5. fanotify 初始化也失败 → 上报无执行层，节点标记防护不可用，管理端高风险告警。
-6. 降级原因必须进入心跳与审计，不能只写本地日志。
+端到端验证：`sudo bash test/e2e/e2e-fanotify.sh`（覆盖写回滚、新建删除、发布放行、吊销后回滚、审计验链）。
 
 ## 7. 审计链
 
@@ -696,7 +700,7 @@ sudo go test ./internal/enforcer -run NO_TESTS -bench . -benchtime=2000x
 |---|---|---|---|
 | P0 骨架 | 三端工程结构、核心库、REST API、SQLite、mTLS enrollment、策略签发与同步、15 秒心跳、审计上报与验链、eBPF LSM 执行器（13 个 hook、inode 保护集合与授权 map、ringbuf）、observe 回退、用户态 e2e、`make build` | 核心库、控制面、两个 Agent、eBPF 执行器代码与 e2e 已落地；内核真实阻断已在 Linux 6.6 + bpf LSM 验证 | 同机 e2e + 内核验证：发布放行、webshell 写入被拒（需 bpf LSM 与 publisher uid 配置）、吊销后拒绝、审计验链 |
 | P1 内核主阻断完善 | mmap 父目录、link 源 inode、单文件规则 unlink/rename、observe 接线、SSE 推送与授权确认、新建子树的内核继承（d_instantiate）、性能基准均已完成；5.10 兼容待做 | 基本完成 | 5.10 与 6.6 至少各验证一次 |
-| P2 降级恢复 | fanotify 权限事件、队列溢出与监听进程重启恢复、审批流、降级节点标红与合规统计 | 未实现 | 无 BPF LSM 的内核上能稳定阻断 open 写，审批与审计可用 |
+| P2 降级恢复 | fanotify 检测+回滚、基线、周期巡检、审批流、降级标红已完成；队列溢出处理与崩溃窗口恢复待补 | 基本完成 | `test/e2e/e2e-fanotify.sh` 通过 |
 | P3 容器与规模化 | overlayfs copy-up 的路径+inode 双重匹配验证、容器场景、多节点规模、审计保留与导出 | 未实现，待验证 | 容器场景有明确的支持/不支持清单，不靠推断 |
 | P4 RASP | 运行期应用层防护 | 未实现，范围未定 | 另行立项评估，本文不承诺任何应用层能力 |
 
