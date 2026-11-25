@@ -395,6 +395,18 @@ cat /var/www/site/sub/site.css
 
 内核侧只认 uid：发布端以哪个 uid 运行，protect 节点 enroll 时就用 `--publisher-uids` 登记哪个 uid（可以逗号分隔多个）。演示默认 `0`，所以 `tg-publish` 以 root 运行、root 可消费 grant。生产应改用专用非 root uid，否则令牌有效期内该 uid 的所有进程都能写被授权路径。授权只在该次发布令牌有效期内存在，`done` 后不会自动续期。
 
+## 9.1 跨机发布（发布端与被保护机分离）
+
+发布请求里加 `"delivery":"pull"`：发布端只把制品与签名清单上传到控制面，目标节点 Agent 拉取、复核每个文件哈希后在本机落盘。发布端不需要访问受保护主机。
+
+```bash
+curl -sS --cacert "$CA" -b /tmp/tg.cookies -H 'Content-Type: application/json' \
+  -d "{\"node_id\":\"$PROT_ID\",\"publisher_id\":\"$PUB_ID\",\"source_dir\":\"/tmp/tg-release\",\"target_dir\":\"/var/www/site\",\"delivery\":\"pull\"}" \
+  "$BASE/api/v1/publish-requests"
+```
+
+随后发布端进程上传制品；目标节点的 Agent 在下一次心跳周期拉取并安装，请求状态从 `token_issued` 变为 `done`。完整验证脚本：`sudo bash test/e2e/e2e-pull.sh`（含"发布端不写目标目录"与"篡改制品被拒"两条断言）。
+
 ## 10. 验证 C：吊销后再次被拒
 
 ```bash

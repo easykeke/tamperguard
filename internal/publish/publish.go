@@ -203,6 +203,10 @@ func (p *Publisher) handle(ctx context.Context, req store.PublishRequest) error 
 	}
 	p.log.Info("manifest built", "request", req.ID, "files", len(man.Entries), "digest", man.Digest)
 
+	if req.Delivery == store.DeliveryPull {
+		return p.publishPull(ctx, req, man)
+	}
+
 	grant, err := p.client.SubmitManifest(ctx, req.ID, man.Digest, man.Agent())
 	if err != nil {
 		return fmt.Errorf("publish: submit manifest: %w", err)
@@ -237,6 +241,32 @@ func (p *Publisher) handle(ctx context.Context, req store.PublishRequest) error 
 	if err := p.client.CompleteRequest(ctx, req.ID, true, ""); err != nil {
 		return fmt.Errorf("publish: report completion: %w", err)
 	}
+	return nil
+}
+
+// publishPull stages every file on the control plane and stops. The target
+// node's agent fetches, verifies and writes them, so the publisher never needs
+// network access to the protected host.
+func (p *Publisher) publishPull(ctx context.Context, req store.PublishRequest, man *Manifest) error {
+	for _, e := range man.Entries {
+		src := filepath.Join(req.SourceDir, filepath.FromSlash(e.Rel))
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(data)
+		got := hex.EncodeToString(sum[:])
+		if subtle.ConstantTimeCompare([]byte(got), []byte(e.SHA256)) != 1 {
+			return fmt.Errorf("publish: %s changed after hashing", src)
+		}
+		if err := p.client.UploadArtifact(ctx, req.ID, e.Rel, got, data); err != nil {
+			return fmt.Errorf("publish: upload %s: %w", e.Rel, err)
+		}
+	}
+	if _, err := p.client.SubmitManifest(ctx, req.ID, man.Digest, man.Agent()); err != nil {
+		return fmt.Errorf("publish: submit manifest: %w", err)
+	}
+	p.log.Info("release staged for pull delivery", "request", req.ID, "files", len(man.Entries))
 	return nil
 }
 

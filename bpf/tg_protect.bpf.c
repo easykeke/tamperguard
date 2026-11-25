@@ -347,6 +347,22 @@ static __always_inline struct inode *dentry_inode(struct dentry *de)
 	return BPF_CORE_READ(de, d_inode);
 }
 
+/* forget_inode drops an inode from both protection maps. Used only on paths
+ * whose removal has already been authorised by a release grant: the inode is
+ * going away, and leaving it indexed would cause false positives once the inode
+ * number is reused by an unrelated file. */
+static __always_inline void forget_inode(struct inode *inode)
+{
+	struct inode_key k = {};
+
+	if (!inode)
+		return;
+	k.ino = BPF_CORE_READ(inode, i_ino);
+	k.dev = inode_dev(inode);
+	bpf_map_delete_elem(&protected_files, &k);
+	bpf_map_delete_elem(&protected_dirs, &k);
+}
+
 static __always_inline struct inode *dentry_parent(struct dentry *de)
 {
 	if (!de)
@@ -413,7 +429,10 @@ int BPF_PROG(tg_inode_unlink, struct inode *dir, struct dentry *dentry)
 	int ret = decide(dentry_inode(dentry), dentry_parent(dentry), TG_OP_UNLINK);
 	if (ret)
 		return ret;
-	return decide_dir(dir, TG_OP_UNLINK);
+	ret = decide_dir(dir, TG_OP_UNLINK);
+	if (!ret)
+		forget_inode(dentry_inode(dentry));
+	return ret;
 }
 
 SEC("lsm/inode_rmdir")
@@ -422,7 +441,10 @@ int BPF_PROG(tg_inode_rmdir, struct inode *dir, struct dentry *dentry)
 	int ret = decide(dentry_inode(dentry), dentry_parent(dentry), TG_OP_RMDIR);
 	if (ret)
 		return ret;
-	return decide_dir(dir, TG_OP_RMDIR);
+	ret = decide_dir(dir, TG_OP_RMDIR);
+	if (!ret)
+		forget_inode(dentry_inode(dentry));
+	return ret;
 }
 
 SEC("lsm/inode_rename")

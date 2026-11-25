@@ -107,7 +107,7 @@ agents reject a snapshot whose signature or digest is wrong.
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | GET | `/publish-requests?status=` | — | List |
-| POST | `/publish-requests` | `{"node_id","publisher_id","source_dir","note"}` | → `{"id", "status":"pending"}` |
+| POST | `/publish-requests` | `{"node_id","publisher_id","source_dir","target_dir","delivery":"local\|pull","note"}` | `delivery` defaults to `local`; `pull` means the target node fetches the artefacts |
 | GET | `/publish-requests/{id}` | — | Request detail |
 | POST | `/publish-requests/{id}/cancel` | — | Only while `pending`/`manifest_received` |
 
@@ -116,7 +116,8 @@ Publisher-agent endpoints (mTLS, role=publish):
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | GET | `/publish/pending` | — | Requests assigned to the calling publisher |
-| POST | `/publish/{id}/manifest` | `{"manifest":"sha256:...","files":[{"path","sha256","size"}]}` | → `{"token","expires_at","token_id","paths"}` |
+| POST | `/publish/{id}/artifact` | raw body + `X-TG-SHA256` header, query `?path=<rel>` | Stages one file for pull delivery (must be uploaded before the manifest) |
+| POST | `/publish/{id}/manifest` | `{"manifest":"sha256:...","files":[{"path","sha256","size"}]}` | → `{"token","expires_at","token_id","paths"}`; in pull mode every file must match a staged artefact |
 | GET | `/publish/{id}/ready` | — | → `{"ready":bool,"token_id","node_id","status"}`: whether the target node has installed the grant |
 | POST | `/publish/{id}/complete` | `{"ok":true,"error":""}` | Closes the request |
 

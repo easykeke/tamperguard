@@ -269,6 +269,84 @@ func (c *Client) PublishReady(ctx context.Context, id string) (bool, error) {
 	return out.Ready, nil
 }
 
+// ---------- pull delivery ----------
+
+// DeliveryInfo describes one pull-mode release waiting for this node.
+type DeliveryInfo struct {
+	Request   store.PublishRequest `json:"request"`
+	Files     []store.PublishFile  `json:"files"`
+	Manifest  string               `json:"manifest"`
+	TargetDir string               `json:"target_dir"`
+}
+
+// PendingDeliveries lists pull releases waiting for this node.
+func (c *Client) PendingDeliveries(ctx context.Context) ([]store.PublishRequest, error) {
+	var out []store.PublishRequest
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agent/deliveries", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DeliveryInfo returns the manifest and file list of one delivery.
+func (c *Client) DeliveryInfo(ctx context.Context, id string) (*DeliveryInfo, error) {
+	var out DeliveryInfo
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agent/deliveries/"+id, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DownloadArtifact streams one file of a delivery into w.
+func (c *Client) DownloadArtifact(ctx context.Context, id, relPath string, w io.Writer) (int64, error) {
+	q := url.Values{}
+	q.Set("path", relPath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.base+"/api/v1/agent/deliveries/"+id+"/artifact?"+q.Encode(), nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return 0, &APIError{Status: resp.StatusCode, Body: string(raw)}
+	}
+	return io.Copy(w, resp.Body)
+}
+
+// CompleteDelivery reports the outcome of a pull delivery.
+func (c *Client) CompleteDelivery(ctx context.Context, id string, ok bool, errMsg string) error {
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/deliveries/"+id+"/complete",
+		map[string]any{"ok": ok, "error": errMsg}, nil)
+}
+
+// UploadArtifact stages one file of a pull-mode release on the control plane.
+func (c *Client) UploadArtifact(ctx context.Context, requestID, relPath, sha256Hex string, data []byte) error {
+	q := url.Values{}
+	q.Set("path", relPath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.base+"/api/v1/publish/"+requestID+"/artifact?"+q.Encode(), bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-TG-SHA256", sha256Hex)
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode != http.StatusOK {
+		return &APIError{Status: resp.StatusCode, Body: string(raw)}
+	}
+	return nil
+}
+
 // ---------- self upgrade ----------
 
 // UpgradeInfo is the control plane's answer to an upgrade check.

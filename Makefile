@@ -60,6 +60,10 @@ e2e-rasp:
 e2e-rasp-java:
 	bash test/e2e/e2e-rasp-java.sh
 
+## e2e-pull: cross-machine (pull) publishing
+e2e-pull:
+	bash test/e2e/e2e-pull.sh
+
 ## vet: static checks
 vet:
 	$(GO) vet ./...

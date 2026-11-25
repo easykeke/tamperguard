@@ -222,9 +222,15 @@ func (s *Server) routes() {
 	m.Handle("GET /api/v1/audit/verify", s.admin(s.handleAuditVerify))
 
 	m.Handle("GET /api/v1/publish/pending", s.agent("publish", s.handlePublishPending))
+	m.Handle("POST /api/v1/publish/{id}/artifact", s.agent("publish", s.handlePublishArtifact))
 	m.Handle("POST /api/v1/publish/{id}/manifest", s.agent("publish", s.handlePublishManifest))
 	m.Handle("POST /api/v1/publish/{id}/complete", s.agent("publish", s.handlePublishComplete))
 	m.Handle("GET /api/v1/publish/{id}/ready", s.agent("publish", s.handlePublishReady))
+
+	m.Handle("GET /api/v1/agent/deliveries", s.agent("protect", s.handleDeliveries))
+	m.Handle("GET /api/v1/agent/deliveries/{id}", s.agent("protect", s.handleDeliveryInfo))
+	m.Handle("GET /api/v1/agent/deliveries/{id}/artifact", s.agent("protect", s.handleDeliveryArtifact))
+	m.Handle("POST /api/v1/agent/deliveries/{id}/complete", s.agent("protect", s.handleDeliveryComplete))
 
 	m.HandleFunc("GET /", s.handleUI)
 }

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/easykeke/tamperguard/internal/audit"
@@ -526,6 +527,32 @@ func (s *Server) handlePublishManifest(w http.ResponseWriter, r *http.Request) {
 	if in.Manifest == "" {
 		writeErr(w, http.StatusBadRequest, "invalid", "manifest digest is required")
 		return
+	}
+
+	// Persist the manifest file list. For pull deliveries every file must have
+	// been uploaded first and match the manifest exactly, so the control plane
+	// never hands a node a file that differs from what the publisher hashed.
+	files := make([]store.PublishFile, 0, len(in.Files))
+	for _, f := range in.Files {
+		rel, err := cleanRel(f.Path)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid", "file path: "+err.Error())
+			return
+		}
+		files = append(files, store.PublishFile{Path: rel, SHA256: strings.ToLower(f.SHA256), Size: f.Size})
+	}
+	if err := s.st.SetPublishFiles(reqRow.ID, files); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if reqRow.Delivery == store.DeliveryPull {
+		for _, f := range files {
+			art, err := s.st.GetArtifact(reqRow.ID, f.Path)
+			if err != nil || art.SHA256 != f.SHA256 || art.Size != f.Size {
+				writeErr(w, http.StatusConflict, "conflict", "artefact missing or mismatched for "+f.Path)
+				return
+			}
+		}
 	}
 
 	p, ok := s.policyForNode(reqRow.NodeID)

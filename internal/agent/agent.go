@@ -232,6 +232,9 @@ func (a *Agent) tick(ctx context.Context) {
 	if err := a.sync(ctx); err != nil {
 		a.log.Warn("heartbeat failed", "err", err)
 	}
+	if a.state.Role == "protect" {
+		a.deliverPending(ctx)
+	}
 	if err := a.flush(ctx); err != nil {
 		a.log.Warn("audit upload failed", "err", err)
 	}

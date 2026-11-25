@@ -104,13 +104,41 @@ type PublishRequest struct {
 	TargetDir   string `json:"target_dir"`
 	Note        string `json:"note"`
 	Status      string `json:"status"`
-	Manifest    string `json:"manifest"`
-	TokenID     string `json:"token_id"`
-	Error       string `json:"error"`
-	CreatedBy   string `json:"created_by"`
-	CreatedAt   int64  `json:"created_at"`
-	UpdatedAt   int64  `json:"updated_at"`
+	// Delivery is "local" (publisher writes straight to target_dir) or "pull"
+	// (publisher uploads artefacts; the target node's agent fetches and writes).
+	Delivery  string `json:"delivery"`
+	Manifest  string `json:"manifest"`
+	TokenID   string `json:"token_id"`
+	Error     string `json:"error"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
+
+// PublishFile is one entry of a release manifest stored by the control plane.
+type PublishFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+// Artifact is one uploaded file waiting for a pull delivery.
+type Artifact struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+// Delivery modes.
+const (
+	DeliveryLocal = "local"
+	DeliveryPull  = "pull"
+)
+
+// Delivery status values that exist only in pull mode.
+const (
+	PublishDelivering = "delivering"
+)
 
 // Publish status values.
 const (
@@ -299,6 +327,20 @@ func (s *Store) migrate() error {
 			published_at INTEGER NOT NULL,
 			PRIMARY KEY (version, os, arch)
 		)`,
+		`CREATE TABLE IF NOT EXISTS publish_files (
+			request_id TEXT NOT NULL,
+			path TEXT NOT NULL,
+			sha256 TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			PRIMARY KEY (request_id, path)
+		)`,
+		`CREATE TABLE IF NOT EXISTS publish_artifacts (
+			request_id TEXT NOT NULL,
+			path TEXT NOT NULL,
+			sha256 TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			PRIMARY KEY (request_id, path)
+		)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.Exec(q); err != nil {
@@ -310,6 +352,7 @@ func (s *Store) migrate() error {
 	// and ignored.
 	additive := []string{
 		`ALTER TABLE nodes ADD COLUMN active_grants TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE publish_requests ADD COLUMN delivery TEXT NOT NULL DEFAULT 'local'`,
 	}
 	for _, q := range additive {
 		if _, err := s.db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -606,21 +649,24 @@ func (s *Store) CreatePublishRequest(r PublishRequest) (PublishRequest, error) {
 		r.ID = idgen.New("pr_")
 	}
 	r.Status = PublishPending
+	if r.Delivery == "" {
+		r.Delivery = DeliveryLocal
+	}
 	r.CreatedAt = now()
 	r.UpdatedAt = r.CreatedAt
 	_, err := s.db.Exec(`INSERT INTO publish_requests
-		(id, node_id, publisher_id, source_dir, target_dir, note, status, created_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		r.ID, r.NodeID, r.PublisherID, r.SourceDir, r.TargetDir, r.Note, r.Status, r.CreatedBy, r.CreatedAt, r.UpdatedAt)
+		(id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, created_by, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ID, r.NodeID, r.PublisherID, r.SourceDir, r.TargetDir, r.Note, r.Status, r.Delivery, r.CreatedBy, r.CreatedAt, r.UpdatedAt)
 	return r, err
 }
 
-const publishCols = `id, node_id, publisher_id, source_dir, target_dir, note, status, manifest, token_id, error, created_by, created_at, updated_at`
+const publishCols = `id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, manifest, token_id, error, created_by, created_at, updated_at`
 
 func scanPublish(sc interface{ Scan(...any) error }) (PublishRequest, error) {
 	var r PublishRequest
 	err := sc.Scan(&r.ID, &r.NodeID, &r.PublisherID, &r.SourceDir, &r.TargetDir, &r.Note, &r.Status,
-		&r.Manifest, &r.TokenID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
+		&r.Delivery, &r.Manifest, &r.TokenID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -688,6 +734,113 @@ func (s *Store) UpdatePublishRequest(id, status, manifest, tokenID, errMsg strin
 	_, err := s.db.Exec(`UPDATE publish_requests SET status=?, manifest=?, token_id=?, error=?, updated_at=? WHERE id=?`,
 		status, manifest, tokenID, errMsg, now(), id)
 	return err
+}
+
+// SetPublishFiles replaces the manifest file list for a request.
+func (s *Store) SetPublishFiles(requestID string, files []PublishFile) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM publish_files WHERE request_id=?`, requestID); err != nil {
+		return err
+	}
+	for _, f := range files {
+		if _, err := tx.Exec(`INSERT INTO publish_files (request_id, path, sha256, size) VALUES (?,?,?,?)`,
+			requestID, f.Path, f.SHA256, f.Size); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListPublishFiles returns the manifest file list for a request.
+func (s *Store) ListPublishFiles(requestID string) ([]PublishFile, error) {
+	rows, err := s.db.Query(`SELECT path, sha256, size FROM publish_files WHERE request_id=? ORDER BY path`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PublishFile
+	for rows.Next() {
+		var f PublishFile
+		if err := rows.Scan(&f.Path, &f.SHA256, &f.Size); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// RecordArtifact records an uploaded file for a pull-mode request.
+func (s *Store) RecordArtifact(requestID string, a Artifact) error {
+	_, err := s.db.Exec(`INSERT INTO publish_artifacts (request_id, path, sha256, size) VALUES (?,?,?,?)
+		ON CONFLICT(request_id, path) DO UPDATE SET sha256=excluded.sha256, size=excluded.size`,
+		requestID, a.Path, a.SHA256, a.Size)
+	return err
+}
+
+// GetArtifact returns one uploaded artefact record.
+func (s *Store) GetArtifact(requestID, path string) (Artifact, error) {
+	var a Artifact
+	err := s.db.QueryRow(`SELECT path, sha256, size FROM publish_artifacts WHERE request_id=? AND path=?`,
+		requestID, path).Scan(&a.Path, &a.SHA256, &a.Size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Artifact{}, ErrNotFound
+	}
+	return a, err
+}
+
+// ListArtifacts returns all uploaded artefacts for a request.
+func (s *Store) ListArtifacts(requestID string) ([]Artifact, error) {
+	rows, err := s.db.Query(`SELECT path, sha256, size FROM publish_artifacts WHERE request_id=? ORDER BY path`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Artifact
+	for rows.Next() {
+		var a Artifact
+		if err := rows.Scan(&a.Path, &a.SHA256, &a.Size); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListPullDeliveriesForNode returns pull-mode requests waiting for this node.
+func (s *Store) ListPullDeliveriesForNode(nodeID string) ([]PublishRequest, error) {
+	rows, err := s.db.Query(`SELECT `+publishCols+` FROM publish_requests
+		WHERE node_id=? AND delivery=? AND status IN (?,?) ORDER BY created_at LIMIT 20`,
+		nodeID, DeliveryPull, PublishToken, PublishDelivering)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PublishRequest
+	for rows.Next() {
+		r, err := scanPublish(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ClaimPublishDelivery atomically moves a request into "delivering" so that two
+// agents cannot deliver the same release twice.
+func (s *Store) ClaimPublishDelivery(id, nodeID string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE publish_requests SET status=?, updated_at=?
+		WHERE id=? AND node_id=? AND delivery=? AND status=?`,
+		PublishDelivering, now(), id, nodeID, DeliveryPull, PublishToken)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // ---------- tokens ----------

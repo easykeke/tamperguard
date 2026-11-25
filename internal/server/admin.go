@@ -263,8 +263,16 @@ func (s *Server) handleCreatePublish(w http.ResponseWriter, r *http.Request) {
 		SourceDir   string `json:"source_dir"`
 		TargetDir   string `json:"target_dir"`
 		Note        string `json:"note"`
+		Delivery    string `json:"delivery"`
 	}
 	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if in.Delivery == "" {
+		in.Delivery = store.DeliveryLocal
+	}
+	if in.Delivery != store.DeliveryLocal && in.Delivery != store.DeliveryPull {
+		writeErr(w, http.StatusBadRequest, "invalid", "delivery must be local or pull")
 		return
 	}
 	node, err := s.st.GetNode(in.NodeID)
@@ -288,6 +296,7 @@ func (s *Server) handleCreatePublish(w http.ResponseWriter, r *http.Request) {
 		SourceDir:   in.SourceDir,
 		TargetDir:   in.TargetDir,
 		Note:        in.Note,
+		Delivery:    in.Delivery,
 		CreatedBy:   user,
 	})
 	if err != nil {
