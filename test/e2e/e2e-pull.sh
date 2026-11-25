@@ -11,7 +11,7 @@
 #   3. a tampered artefact is rejected by the node and the release fails
 set -uo pipefail
 
-REPO="${REPO:-/mnt/e/AI-learn/Tamper-proof}"
+REPO="${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN="$REPO/bin"
 DATA=/tmp/tg-e2e-pull
 SITE=/tmp/tg-pull-site

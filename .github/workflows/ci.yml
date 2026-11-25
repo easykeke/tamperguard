@@ -26,10 +26,10 @@ jobs:
         run: sudo bash test/e2e/e2e-sim.sh
 
   bpf-build:
-    # Verifies the eBPF program still compiles and the embedded object is
-    # reproducible. Actual LSM enforcement cannot run on hosted runners
-    # (the kernel command line is not controllable); use test/e2e/e2e-ebpf.sh
-    # on a VM with bpf in the LSM list.
+    # Verifies the eBPF program still compiles and the binaries build with the
+    # regenerated object. Actual LSM enforcement cannot run on hosted runners
+    # (the kernel command line is not controllable); use test/e2e/e2e-ebpf.sh on
+    # a VM with bpf in the LSM list.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -39,10 +39,25 @@ jobs:
       - name: toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang llvm bpftool libbpf-dev
-      - name: generate vmlinux.h (best effort; hosted kernel may lack BTF)
-        run: sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h || echo "no BTF on this runner"
+          sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev
+      - name: bpftool (static release binary)
+        run: |
+          curl -fsSL -o /tmp/bpftool.tar.gz \
+            https://github.com/libbpf/bpftool/releases/download/v7.5.0/bpftool-v7.5.0-amd64.tar.gz
+          tar -xzf /tmp/bpftool.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/bpftool /usr/local/bin/bpftool
+          bpftool version
+      - name: generate vmlinux.h from the runner BTF
+        run: |
+          if sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h; then
+            echo "BTF_OK=1" >> "$GITHUB_ENV"
+            wc -l bpf/vmlinux.h
+          else
+            echo "this runner has no kernel BTF; skipping the eBPF compile check"
+            echo "BTF_OK=0" >> "$GITHUB_ENV"
+          fi
       - name: compile eBPF object
+        if: env.BTF_OK == '1'
         run: make bpf
       - name: build with the regenerated object
         run: make build

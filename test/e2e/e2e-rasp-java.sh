@@ -8,7 +8,7 @@
 #   3. the probe picks up the rule change without restarting the JVM
 set -uo pipefail
 
-REPO="${REPO:-/mnt/e/AI-learn/Tamper-proof}"
+REPO="${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN="$REPO/bin"
 DATA=/tmp/tg-e2e-java
 SITE=/tmp/tg-rasp-java-site

@@ -4,7 +4,7 @@
 # Intended to run inside WSL/Linux as root.
 set -uo pipefail
 
-REPO=/mnt/e/AI-learn/Tamper-proof
+REPO="${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN=$REPO/bin
 DATA=/tmp/tg-e2e
 SITE=/tmp/tg-site

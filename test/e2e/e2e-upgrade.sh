@@ -8,7 +8,7 @@
 #   3. the agent exits 0 with a "restart required" signal so systemd restarts it
 set -uo pipefail
 
-REPO="${REPO:-/mnt/e/AI-learn/Tamper-proof}"
+REPO="${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN="$REPO/bin"
 DATA=/tmp/tg-e2e-up
 PORT=18447

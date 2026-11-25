@@ -12,7 +12,7 @@
 #   5. blocked events reach the audit chain
 set -uo pipefail
 
-REPO="${REPO:-/mnt/e/AI-learn/Tamper-proof}"
+REPO="${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN="$REPO/bin"
 DATA=/tmp/tg-e2e-fan
 SITE=/tmp/tg-site-fan
