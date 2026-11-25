@@ -212,6 +212,7 @@ func cmdRun(args []string) error {
 	upgradeInterval := fs.Duration("upgrade-interval", 6*time.Hour, "how often to check for updates")
 	raspEnabled := fs.Bool("rasp", true, "serve the application-layer probe socket")
 	raspSocket := fs.String("rasp-socket", "", "override the probe socket path")
+	integrity := fs.Bool("integrity", true, "Windows: also label protected paths High (NO_WRITE_UP), needs SeSecurityPrivilege")
 	_ = fs.Parse(args)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -222,9 +223,10 @@ func cmdRun(args []string) error {
 		return err
 	}
 	enf, err := enforcer.SelectKind(*backend, enforcer.Options{
-		PublisherUIDs: state.PublisherUIDs,
-		PublisherSIDs: state.PublisherSIDs,
-		StateDir:      *stateDir,
+		PublisherUIDs:  state.PublisherUIDs,
+		PublisherSIDs:  state.PublisherSIDs,
+		StateDir:       *stateDir,
+		IntegrityLevel: *integrity,
 	})
 	if err != nil {
 		return err

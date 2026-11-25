@@ -73,6 +73,7 @@ Windows 没有 eBPF LSM，也没有 fanotify 等价物；用户态可用的同�
 | 阻断边界 | 阻断非管理员进程的写入/删除/重命名；管理员（含以 SYSTEM 运行的 IIS 应用池）不受限 |
 | 审计 | 无内核事件：只有策略应用/错误与 RASP 事件进审计链，**不产生每次写操作记录** |
 | 卸载/回滚 | `tg-agent unlock --state-dir ...` 恢复继承权限；Agent 退出或崩溃**不会**自动解锁（防止防护静默消失） |
+| 完整性级别（MIC，默认开启） | 受保护路径在 DACL 之外再打 High + `NO_WRITE_UP` 完整性标签（继承子对象）；Medium 完整性进程（IIS 应用池、PHP、普通用户进程）即使 DACL 允许也写不进去；发布窗口内临时降为 Medium，让授权账号通过 DACL 授予写入 | 需要 `SeSecurityPrivilege`（管理员/SYSTEM 运行时可自动启用）；`--integrity=false` 关闭 |
 
 实测限制与后续路线：
 

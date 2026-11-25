@@ -14,7 +14,7 @@ func Probe(stateDir string) ProbeReport {
 	if v := windows.RtlGetVersion(); v != nil {
 		rep.KernelRelease = fmt.Sprintf("Windows %d.%d.%d", v.MajorVersion, v.MinorVersion, v.BuildNumber)
 	}
-	e, err := NewWindowsACL(nil, stateDir)
+	e, err := NewWindowsACL(nil, stateDir, true)
 	if err != nil {
 		rep.BPFLoadError = "windows-acl: " + err.Error()
 		rep.Selected = "observe"

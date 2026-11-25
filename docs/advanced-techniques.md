@@ -121,7 +121,7 @@ fs-verity 为单个文件建立 Merkle 树并持久化，启用后文件变为**
 | 优先级 | 能力 | 平台 | 依赖 | 预期收益 | 成本/风险 |
 |---|---|---|---|---|---|
 | P5.1 | Landlock 进程自保护（`tg-agent landlock run`） | Linux | 内核 Landlock（主流发行版默认启用） | 高：Web 进程被 RCE 后写不了站点 | 低 |
-| P5.2 | MIC 完整性级别加固（ACL 后端增强） | Windows | 管理员权限 | 中高：ACL 被改坏仍能挡 | 低 |
+| P5.2 | MIC 完整性级别加固（ACL 后端增强） | Windows | 管理员权限 | 中高：ACL 被改坏仍能挡 | 低（**已实现，0.2.0**） |
 | P5.3 | fs-verity 发布固化（发布完成后自动 enable） | Linux | 文件系统支持 verity | 高：内核级只读 + 读取校验 | 中 |
 | P5.4 | USN/ETW 审计 + 恢复（Windows 降级层） | Windows | 无 | 中：无驱动场景可用 | 中 |
 | P5.5 | minifilter 驱动（自研或采购） | Windows | EV 证书 + 微软签名 + HLK | 高：真正同步阻断 + 精确审计 | 高 |

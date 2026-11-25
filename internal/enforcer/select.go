@@ -13,6 +13,9 @@ type Options struct {
 	PublisherSIDs []string
 	// StateDir is where the degraded backends keep their baseline copies.
 	StateDir string
+	// IntegrityLevel enables the Windows MIC hardening layer (label protected
+	// paths High with NO_WRITE_UP in addition to the ACL lockdown).
+	IntegrityLevel bool
 }
 
 // Select returns the strongest enforcement backend available in this build.

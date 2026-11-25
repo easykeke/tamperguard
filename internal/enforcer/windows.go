@@ -44,6 +44,9 @@ type WindowsACL struct {
 	sids   []*windows.SID
 	events *Buffer
 
+	mic    bool
+	micErr error
+
 	mu      sync.Mutex
 	rt      Runtime
 	applied map[string]string // normalized path -> native path
@@ -54,7 +57,7 @@ type WindowsACL struct {
 
 // NewWindowsACL builds the backend. publisherSIDs may be SIDs ("S-1-5-...") or
 // local/domain account names; they are resolved immediately.
-func NewWindowsACL(publisherSIDs []string, stateDir string) (*WindowsACL, error) {
+func NewWindowsACL(publisherSIDs []string, stateDir string, integrity bool) (*WindowsACL, error) {
 	token := windows.GetCurrentProcessToken()
 	if !token.IsElevated() {
 		return nil, errors.New("windows-acl: the agent must run elevated (Administrator or SYSTEM)")
@@ -65,6 +68,14 @@ func NewWindowsACL(publisherSIDs []string, stateDir string) (*WindowsACL, error)
 		events:  NewBuffer(128),
 		applied: map[string]string{},
 		stop:    make(chan struct{}),
+	}
+	if integrity {
+		if err := enablePrivilege("SeSecurityPrivilege"); err != nil {
+			w.micErr = err
+			w.log.Warn("windows-acl: MIC disabled (cannot enable SeSecurityPrivilege)", "err", err)
+		} else {
+			w.mic = true
+		}
 	}
 	for _, raw := range publisherSIDs {
 		sid, err := resolveSID(raw)
@@ -83,11 +94,15 @@ func (w *WindowsACL) Name() string { return "windows-acl" }
 
 // Capability implements Enforcer.
 func (w *WindowsACL) Capability() Capability {
+	reason := "ACL lockdown: blocks at open for non-administrators; existing handles and administrators bypass; no per-write audit"
+	if w.mic {
+		reason += "; MIC: protected paths are labelled High with NO_WRITE_UP, so Medium-integrity processes (IIS app pools, PHP) cannot write even if their DACL allows it"
+	}
 	return Capability{
 		Kind:      "windows-acl",
 		Available: true,
 		Degraded:  true,
-		Reason:    "ACL lockdown: blocks at open for non-administrators; existing handles and administrators bypass; no per-write audit",
+		Reason:    reason,
 	}
 }
 
@@ -103,6 +118,7 @@ func (w *WindowsACL) Update(rt Runtime) error {
 	}
 	now := time.Now().Unix()
 	var errs []string
+	var micErrs []string
 	applied := map[string]string{}
 
 	for _, rule := range rt.Policy.Policy.Paths {
@@ -126,21 +142,32 @@ func (w *WindowsACL) Update(rt Runtime) error {
 			errs = append(errs, fmt.Sprintf("%s: %v", native, err))
 			continue
 		}
+		if w.mic {
+			// While a grant is live the label drops to Medium so the authorised
+			// publisher account (normally a medium-integrity service account)
+			// can write through the DACL grant; otherwise the tree is High and
+			// no medium-integrity process can touch it.
+			high := !w.grantCovers(rt, norm, now)
+			if err := setIntegrityLevel(native, high, info.IsDir()); err != nil {
+				micErrs = append(micErrs, fmt.Sprintf("%s (MIC): %v", native, err))
+			}
+		}
 		applied[norm] = native
 	}
 
 	w.mu.Lock()
 	w.applied = applied
-	if len(errs) > 0 {
-		w.health = errors.New(strings.Join(errs, "; "))
+	allErrs := append(append([]string{}, errs...), micErrs...)
+	if len(allErrs) > 0 {
+		w.health = errors.New(strings.Join(allErrs, "; "))
 	} else {
 		w.health = nil
 	}
 	w.mu.Unlock()
 
-	if len(errs) > 0 {
-		w.log.Error("windows-acl: some paths could not be locked", "errors", strings.Join(errs, "; "))
-		w.events.Emit(Event{Time: now, Kind: audit.KindEnforcerError, Reason: strings.Join(errs, "; ")})
+	if len(allErrs) > 0 {
+		w.log.Error("windows-acl: some paths could not be locked", "errors", strings.Join(allErrs, "; "))
+		w.events.Emit(Event{Time: now, Kind: audit.KindEnforcerError, Reason: strings.Join(allErrs, "; ")})
 		return nil
 	}
 	if err := w.saveRoots(applied); err != nil {
@@ -282,6 +309,14 @@ func (w *WindowsACL) unlock() error {
 			nil, nil, nil, nil)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", native, err))
+			continue
+		}
+		if w.mic {
+			// Back to Medium so the operator's normal tooling can rewrite the
+			// tree again after the agent is retired.
+			if micErr := setIntegrityLevel(native, false, true); micErr != nil {
+				errs = append(errs, fmt.Sprintf("%s (MIC reset): %v", native, micErr))
+			}
 		}
 	}
 	_ = os.Remove(rootsFile(w.state))
@@ -361,6 +396,9 @@ func loadRoots(stateDir string) ([]string, error) {
 // Unlock restores inherited permissions (explicit operator action).
 func Unlock(stateDir string) error {
 	w := &WindowsACL{state: stateDir, log: slog.Default()}
+	if err := enablePrivilege("SeSecurityPrivilege"); err == nil {
+		w.mic = true
+	}
 	return w.unlock()
 }
 
@@ -382,6 +420,15 @@ func (w *WindowsACL) Health() error {
 		}
 		if dacl == nil {
 			return fmt.Errorf("windows-acl: %s has an empty DACL", native)
+		}
+		if w.mic {
+			level, err := integrityLabel(native)
+			if err != nil {
+				return err
+			}
+			if level == 0 {
+				return fmt.Errorf("windows-acl: %s has no integrity label", native)
+			}
 		}
 	}
 	return nil
