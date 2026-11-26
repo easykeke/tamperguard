@@ -458,6 +458,18 @@ Start-Service TamperGuardAgent
 - 想保留管理员写权限（不推荐）：`run --windows-allow-admins`；
 - MIC 在不支持的宿主会自动禁用，capability 里会写明原因。
 
+### 9.7 eBPF 链接固化与维护
+
+Linux 主执行层会把 14 个 LSM 链接 pin 到 `/sys/fs/bpf/tamperguard/`。这样即使 Agent 被 `kill -9`，在内核里的最后一次策略仍继续阻断写入，直到 Agent 被重新拉起（启动时会先清理旧链接再挂新链接）。
+
+由此带来一个运维语义：**停止服务不等于解除防护**（fail-closed）。需要临时维护时执行：
+
+```bash
+sudo tg-agent ebpf-detach     # 关闭并移除 pinned 链接
+```
+
+卸载流程会自动执行 detach；WSL2/6.6 内核实测：杀进程后 root 写入仍被拒，detach 后放行。
+
 ### 9.6 Web 层校验代理（强烈推荐）
 
 ```bash
@@ -532,6 +544,7 @@ sudo rm -rf /var/lib/tamperguard-agent
 | `tg-proxy` 返回 404 | 请求路径不在签名清单 | 重新发布/同步；确认 `--sync` 成功 |
 | `tg-proxy` 启动失败 `signature does not verify` | 清单被改或公钥不匹配 | 重新 `--sync`；确认 agent state 与节点一致 |
 | `--require-signed` 拒绝启动 | 用了本地快照 | 先 `--sync`，或去掉 `--require-signed`（不推荐） |
+| 停服务后写入仍被拦截 | eBPF 链接已固化（预期行为） | 维护时执行 `tg-agent ebpf-detach`；卸载流程会自动 detach |
 | 卸载请求一直 pending | 管理员尚未审批 | 管理端「卸载审批」批准，或等待超时后重新发起 |
 | 挑战码无效/已过期 | 超过 10 分钟或票据被改动 | 重新发起请求或重新下发；挑战码区分大小写 |
 | 节点离线无法自动卸载 | 管控通道不可达 | 用管理端返回的挑战码在主机上执行 `--ticket` |

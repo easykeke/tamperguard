@@ -44,6 +44,8 @@ func main() {
 		err = cmdLandlock(os.Args[2:])
 	case "verity":
 		err = cmdVerity(os.Args[2:])
+	case "ebpf-detach":
+		err = cmdEBPFDetach()
 	case "uninstall":
 		err = cmdUninstall(os.Args[2:])
 	case "unlock":
@@ -70,6 +72,7 @@ func usage() {
   tg-agent probe  [--state-dir DIR]
   tg-agent landlock [--allow-write DIRS] [--check] -- CMD [ARGS...]
   tg-agent verity  enable|digest|check PATH
+  tg-agent ebpf-detach               (remove pinned LSM links; maintenance)
   tg-agent uninstall [--state-dir DIR] [--ticket CODE] [--reason TEXT] [--dry-run]
   tg-agent unlock [--state-dir DIR]   (Windows: restore inherited permissions)
 `)
@@ -152,6 +155,18 @@ func cmdLandlock(args []string) error {
 	if err := landlock.Exec(cfg, command, os.Environ()); err != nil {
 		return fmt.Errorf("landlock: %w", err)
 	}
+	return nil
+}
+
+// cmdEBPFDetach removes the pinned LSM links. Stopping the service does not
+// remove them on purpose (a stopped agent must not silently disable
+// protection), so maintenance uses this command.
+func cmdEBPFDetach() error {
+	n, err := enforcer.DetachPinned()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("detached %d pinned LSM links\n", n)
 	return nil
 }
 

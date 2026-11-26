@@ -15,6 +15,7 @@ import (
 // uids by the agent) take effect without restarting, and that removing the uid
 // closes the door again.
 func TestEBPFPublisherUIDUpdate(t *testing.T) {
+	cleanupPins(t)
 	if os.Getuid() != 0 {
 		t.Skip("requires root")
 	}

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/easykeke/tamperguard/internal/enforcer"
 )
 
 // DefaultSystemTargets returns the systemd unit and service names used by the
@@ -34,6 +36,13 @@ func Perform(ctx context.Context, opts Options) ([]string, error) {
 		}
 	}
 	var actions []string
+	// Remove pinned LSM links first: leaving them behind would keep enforcing
+	// a policy with no agent to update or report it.
+	if n, err := enforcer.DetachPinned(); err != nil {
+		actions = append(actions, fmt.Sprintf("detach pinned LSM links: %v", err))
+	} else if n > 0 {
+		actions = append(actions, fmt.Sprintf("detached %d pinned LSM links", n))
+	}
 	if _, err := os.Stat(unit); err == nil {
 		if out, err := exec.CommandContext(ctx, "systemctl", "disable", "--now", service).CombinedOutput(); err != nil {
 			actions = append(actions, fmt.Sprintf("systemctl disable --now %s: %v (%s)", service, err, string(out)))

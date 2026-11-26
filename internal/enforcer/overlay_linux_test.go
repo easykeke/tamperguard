@@ -27,6 +27,7 @@ import (
 // directories from the host bypasses the overlay index. That requires root on
 // the host, which is outside the threat model.
 func TestOverlayEnforcement(t *testing.T) {
+	cleanupPins(t)
 	if os.Getuid() != 0 {
 		t.Skip("requires root to mount overlay and attach LSM programs")
 	}

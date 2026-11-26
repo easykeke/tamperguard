@@ -15,6 +15,7 @@ import (
 // indexed by the kernel itself (d_instantiate), so it is protected and
 // grantable immediately rather than after the next userspace sync.
 func TestEBPFInheritance(t *testing.T) {
+	cleanupPins(t)
 	if os.Getuid() != 0 {
 		t.Skip("requires root to attach LSM programs")
 	}

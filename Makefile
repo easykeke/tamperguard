@@ -76,6 +76,10 @@ e2e-landlock:
 e2e-proxy-signed:
 	bash test/e2e/e2e-proxy-signed.sh
 
+## e2e-ebpf-pin: pinned LSM links survive kill -9
+e2e-ebpf-pin:
+	bash test/e2e/e2e-ebpf-pin.sh
+
 ## e2e-uninstall: agent uninstall challenge/approval flow
 e2e-uninstall:
 	bash test/e2e/e2e-uninstall.sh

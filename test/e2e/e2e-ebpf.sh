@@ -30,6 +30,8 @@ cleanup() {
   for p in ${AGENT_PID:-} ${PUB_PID:-} ${SERVER_PID:-}; do kill "$p" 2>/dev/null; done
   sleep 1
   wait 2>/dev/null
+  # Pinned links intentionally survive the agent; clear them for the next test.
+  "$BIN/tg-agent" ebpf-detach >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

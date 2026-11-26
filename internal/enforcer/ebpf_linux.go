@@ -85,6 +85,7 @@ var opNames = map[uint32]policy.Op{
 type EBPF struct {
 	objs   tgObjects
 	links  []link.Link
+	pinned []string
 	reader *ringbuf.Reader
 	events *Buffer
 	log    *slog.Logger
@@ -113,9 +114,24 @@ func NewEBPF(publisherUIDs []int) (*EBPF, error) {
 		// Not fatal on kernels with memcg accounting, but worth knowing.
 		slog.Default().Debug("enforcer: could not raise memlock limit", "err", err)
 	}
+	// Links pinned by a previous run keep enforcement alive after SIGKILL.
+	// Remove them before attaching so the new programs use the current maps.
+	if pinningEnabled() {
+		if stale, err := DetachPinned(); err != nil {
+			slog.Default().Warn("enforcer: could not clear stale pinned links", "err", err)
+		} else if stale > 0 {
+			slog.Default().Info("enforcer: cleared stale pinned LSM links", "count", stale)
+		}
+	}
 	objs := tgObjects{}
 	if err := loadTgObjects(&objs, nil); err != nil {
 		return nil, fmt.Errorf("ebpf: load object: %w", err)
+	}
+	if pinningEnabled() {
+		if err := pinConfigMap(objs.TgConfig); err != nil {
+			slog.Default().Warn("enforcer: config map not pinned; maintenance detach cannot disable it",
+				"err", err)
+		}
 	}
 	e := &EBPF{
 		objs:          objs,
@@ -157,6 +173,14 @@ func NewEBPF(publisherUIDs []int) (*EBPF, error) {
 			return nil, fmt.Errorf("ebpf: attach %s: %w", p.name, err)
 		}
 		e.links = append(e.links, l)
+		if pinningEnabled() {
+			if path, err := pinLink(p.name, l); err != nil {
+				slog.Default().Warn("enforcer: link not pinned; protection ends if the agent is killed",
+					"hook", p.name, "err", err)
+			} else {
+				e.pinned = append(e.pinned, path)
+			}
+		}
 	}
 	if err := objs.TgConfig.Update(uint32(0), uint32(1), ebpf.UpdateAny); err != nil {
 		e.Close()
@@ -566,6 +590,9 @@ func (e *EBPF) Close() error {
 		if e.reader != nil {
 			err = e.reader.Close()
 		}
+		// Closing a pinned link does not detach it: a stopped agent must not
+		// silently remove protection. `tg-agent ebpf-detach` (and uninstall)
+		// clears the pins explicitly.
 		for _, l := range e.links {
 			if cerr := l.Close(); cerr != nil && err == nil {
 				err = cerr

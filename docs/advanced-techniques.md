@@ -148,3 +148,24 @@ fs-verity 为单个文件建立 Merkle 树并持久化，启用后文件变为**
 3. [Mandatory Integrity Control — Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)
 4. [Landlock: unprivileged access control — Linux 内核文档](https://docs.kernel.org/userspace-api/landlock.html)
 5. [fs-verity: read-only file-based authenticity protection — Linux 内核文档](https://docs.kernel.org/filesystems/fsverity.html)
+
+## P6.1 eBPF 链接固化：防"杀掉 Agent 即失效"
+
+eBPF LSM 链接默认只由 Agent 进程的 fd 持有，`kill -9` 会让内核立刻 detach，systemd 重启前的几秒成为防护空窗。现在的做法：
+
+- 把 14 个 LSM link 和处理配置 map pin 到 `/sys/fs/bpf/tamperguard/`；
+- Agent 被 SIGKILL 后，pinned link 继续在内核里执行最后一次策略，写入仍返回 EPERM；
+- 新 Agent 启动时先清理旧 pin，再挂新链接（避免重复执行旧策略）；
+- 停止服务不会解除防护（fail-closed）：维护用 `tg-agent ebpf-detach`，卸载流程也会先 detach 再删文件；
+- `ebpf-detach` 先把 pinned 配置 map 置 0（确定性关闭），再移除链接，兼容内核对 detach 时序的差异。
+
+实测（WSL2，内核 6.6，root 写入受保护目录）：
+
+```
+[ok] pinned links present: 15
+[ok] write STILL blocked after kill -9 (pinned link enforces)
+[ok] detached 14 pinned LSM links
+[ok] write allowed after explicit detach
+```
+
+注意：这提高的是"杀掉进程即失效"的成本，不改变"root 可主动 detach"的事实；对抗 root 的边界见 `docs/agent-lifecycle.md` 与 README 的安全边界。

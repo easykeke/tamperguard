@@ -21,6 +21,7 @@ import (
 // It needs root and a kernel with the bpf LSM enabled; it skips otherwise so
 // the normal `go test ./...` stays runnable everywhere.
 func TestEBPFLSMEnforcement(t *testing.T) {
+	cleanupPins(t)
 	if os.Getuid() != 0 {
 		t.Skip("requires root to attach LSM programs")
 	}
