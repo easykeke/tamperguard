@@ -1,6 +1,6 @@
 # TamperGuard 用户手册
 
-版本：0.2.2 ｜ 适用：Linux 服务器、Windows Server ｜ 文档状态：试点可用（见 §0.3）
+版本：0.2.2，适用 Linux 服务器与 Windows Server，文档状态：试点可用（见 §0.3）
 
 ---
 

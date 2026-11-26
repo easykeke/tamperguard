@@ -128,6 +128,7 @@ Makefile            make build，产出 bin/ 下三个二进制
 - [Windows 更强方案评估](docs/windows-stronger-options.md)：CFA、事件驱动自愈、Web 层内容校验、VSS、不可变镜像的对比与选择。
 - [Web 层内容校验](docs/web-verification.md)：tg-proxy 快照 + 逐请求校验，磁盘被改也交付可信内容。
 - [用户手册](docs/user-manual.md)：安装、注册、策略、发布、运维、故障排查与安全边界（试点可用）。
+- [用户手册（Word）](docs/TamperGuard用户手册_v0.2.2.docx)：可直接分发的排版版本（仿宋正文/黑体标题、A4、表格 11pt）。
 - [变更记录](CHANGELOG.md)：能力清单、验证矩阵、已知限制。
 - [安全策略](SECURITY.md)：漏洞报告渠道与威胁模型边界。
 - [贡献指南](CONTRIBUTING.md)：构建、测试矩阵、代码结构、提交要求。
