@@ -9,10 +9,10 @@ import "errors"
 // signed kernel driver.
 func platformEnforcer(opts Options) Enforcer {
 	e, err := NewWindowsACL(WindowsACLConfig{
-		PublisherSIDs: opts.PublisherSIDs,
-		StateDir:      opts.StateDir,
-		Integrity:     opts.IntegrityLevel,
-		AllowAdmins:   opts.AllowAdmins,
+		PublisherSIDs:  opts.PublisherSIDs,
+		StateDir:       opts.StateDir,
+		IntegrityLevel: opts.IntegrityLevel,
+		AllowAdmins:    opts.AllowAdmins,
 	})
 	if err != nil {
 		return nil
@@ -26,9 +26,9 @@ func fanotifyEnforcer(opts Options) (Enforcer, error) {
 
 func windowsACLEnforcer(opts Options) (Enforcer, error) {
 	return NewWindowsACL(WindowsACLConfig{
-		PublisherSIDs: opts.PublisherSIDs,
-		StateDir:      opts.StateDir,
-		Integrity:     opts.IntegrityLevel,
-		AllowAdmins:   opts.AllowAdmins,
+		PublisherSIDs:  opts.PublisherSIDs,
+		StateDir:       opts.StateDir,
+		IntegrityLevel: opts.IntegrityLevel,
+		AllowAdmins:    opts.AllowAdmins,
 	})
 }

@@ -13,9 +13,9 @@ type Options struct {
 	PublisherSIDs []string
 	// StateDir is where the degraded backends keep their baseline copies.
 	StateDir string
-	// IntegrityLevel enables the Windows MIC hardening layer (label protected
-	// paths System with NO_WRITE_UP in addition to the ACL lockdown).
-	IntegrityLevel bool
+	// IntegrityLevel is the Windows MIC label for idle protected paths:
+	// "system" (needs a SYSTEM agent), "high", "medium" or "off".
+	IntegrityLevel string
 	// AllowAdmins keeps write access for the Administrators group on Windows.
 	// Off by default: tamper protection that administrators can bypass with a
 	// plain file copy is not protection.

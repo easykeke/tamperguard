@@ -4,6 +4,7 @@ package enforcer
 
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -46,6 +47,90 @@ const (
 	levelHigh    integrityLevel = 3
 	levelSystem  integrityLevel = 4
 )
+
+// levelName renders a level for logs and the capability string.
+func levelName(l integrityLevel) string {
+	switch l {
+	case levelLow:
+		return "low"
+	case levelMedium:
+		return "medium"
+	case levelHigh:
+		return "high"
+	case levelSystem:
+		return "system"
+	default:
+		return "unknown"
+	}
+}
+
+// parseLevel maps a configuration string to a level. "off"/"none" disables MIC.
+func parseLevel(s string) (integrityLevel, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "system":
+		return levelSystem, true
+	case "high":
+		return levelHigh, true
+	case "medium":
+		return levelMedium, true
+	case "low":
+		return levelLow, true
+	case "off", "none", "disabled":
+		return levelUnknown, true
+	default:
+		return levelUnknown, false
+	}
+}
+
+// levelFromSID reads the last sub-authority of a mandatory label SID.
+func levelFromSID(sid *windows.SID) integrityLevel {
+	if sid == nil {
+		return levelUnknown
+	}
+	ptr := unsafe.Pointer(sid)
+	count := *(*byte)(unsafe.Add(ptr, 1))
+	if count < 1 || count > 15 {
+		return levelUnknown
+	}
+	off := 8 + 4*(int(count)-1)
+	switch *(*uint32)(unsafe.Add(ptr, off)) {
+	case 4096:
+		return levelLow
+	case 8192:
+		return levelMedium
+	case 12288:
+		return levelHigh
+	case 16384:
+		return levelSystem
+	default:
+		return levelUnknown
+	}
+}
+
+// currentTokenIntegrity returns the integrity level of the current process
+// token. A process cannot label an object above its own level, so the agent
+// downgrades the configured level instead of failing every update.
+func currentTokenIntegrity() integrityLevel {
+	tok := windows.GetCurrentProcessToken()
+	var size uint32
+	_ = windows.GetTokenInformation(tok, windows.TokenIntegrityLevel, nil, 0, &size)
+	if size == 0 {
+		return levelUnknown
+	}
+	buf := make([]byte, size)
+	if err := windows.GetTokenInformation(tok, windows.TokenIntegrityLevel, &buf[0], size, &size); err != nil {
+		return levelUnknown
+	}
+	type sidAndAttributes struct {
+		Sid        *windows.SID
+		Attributes uint32
+	}
+	type tokenMandatoryLabel struct {
+		Label sidAndAttributes
+	}
+	tml := (*tokenMandatoryLabel)(unsafe.Pointer(&buf[0]))
+	return levelFromSID(tml.Label.Sid)
+}
 
 // enablePrivilege enables a privilege in the current process token.
 func enablePrivilege(name string) error {

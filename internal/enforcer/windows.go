@@ -49,6 +49,7 @@ type WindowsACL struct {
 	mic         bool
 	micErr      error
 	allowAdmins bool
+	idleLevel   integrityLevel
 
 	// self-heal baseline
 	base           *baseline.Manager
@@ -76,10 +77,12 @@ type WindowsACLConfig struct {
 	PublisherSIDs []string
 	// StateDir stores the list of locked paths for `tg-agent unlock`.
 	StateDir string
-	// Integrity enables the MIC layer: protected paths are labelled System with
-	// NO_WRITE_UP, so even an elevated administrator cannot write them; the
-	// label drops to Medium only while a release grant is live.
-	Integrity bool
+	// IntegrityLevel selects the mandatory label used while idle: "system"
+	// (strongest; the agent must run as a SYSTEM service to set it), "high",
+	// "medium" or "off". Requesting a level above the agent's own token level is
+	// downgraded with a warning, because Windows does not allow labelling an
+	// object above the caller's integrity.
+	IntegrityLevel string
 	// AllowAdmins keeps an explicit "Administrators: full control" ACE. It is
 	// off by default: tamper protection is pointless if any admin process can
 	// simply write the file. Turn it on only for appliances whose operations
@@ -101,12 +104,22 @@ func NewWindowsACL(cfg WindowsACLConfig) (*WindowsACL, error) {
 		applied:     map[string]string{},
 		stop:        make(chan struct{}),
 	}
-	if cfg.Integrity {
+	level, levelOK := parseLevel(cfg.IntegrityLevel)
+	if !levelOK {
+		return nil, fmt.Errorf("windows-acl: unknown integrity level %q", cfg.IntegrityLevel)
+	}
+	if level != levelUnknown {
 		if err := enablePrivilege("SeSecurityPrivilege"); err != nil {
 			w.micErr = err
 			w.log.Warn("windows-acl: MIC disabled (cannot enable SeSecurityPrivilege)", "err", err)
 		} else {
 			w.mic = true
+			if tok := currentTokenIntegrity(); tok != levelUnknown && level > tok {
+				w.log.Warn("windows-acl: requested integrity level is above the agent token; downgrading (run the agent as a SYSTEM service for full strength)",
+					"requested", levelName(level), "token", levelName(tok))
+				level = tok
+			}
+			w.idleLevel = level
 		}
 	}
 	for _, raw := range cfg.PublisherSIDs {
@@ -136,7 +149,7 @@ func (w *WindowsACL) Capability() Capability {
 		reason += " (administrators explicitly allowed)"
 	}
 	if w.mic {
-		reason += "; MIC: protected paths are labelled System with NO_WRITE_UP, so High-integrity (elevated administrator) processes are denied writes as well"
+		reason += fmt.Sprintf("; MIC: protected paths are labelled %s with NO_WRITE_UP, so processes below that level (including elevated administrators when the level is System) are denied writes as well", levelName(w.idleLevel))
 	}
 	reason += "; a determined administrator can still stop the agent or retake ownership, which is why audit evidence exists"
 	if w.base != nil {
@@ -188,11 +201,12 @@ func (w *WindowsACL) Update(rt Runtime) error {
 			continue
 		}
 		if w.mic {
-			// System integrity while idle: an elevated administrator runs at High
-			// and is therefore denied writes. During a live grant the label drops
-			// to Medium so the publisher service account can write through DACL.
-			level := levelSystem
-			if w.grantCovers(rt, norm, now) {
+			// Configured idle level (System when the agent runs as SYSTEM, High
+			// when it runs as an elevated administrator). During a live grant the
+			// label drops to Medium so the publisher account can write through
+			// the DACL grant, then returns to the idle level.
+			level := w.idleLevel
+			if w.grantCovers(rt, norm, now) && level > levelMedium {
 				level = levelMedium
 			}
 			if err := setIntegrity(native, level, info.IsDir()); err != nil {
@@ -491,8 +505,8 @@ func (w *WindowsACL) Health() error {
 			if err != nil {
 				return err
 			}
-			expected := levelSystem
-			if w.grantCovers(w.rt, normFromNative(native), time.Now().Unix()) {
+			expected := w.idleLevel
+			if w.grantCovers(w.rt, normFromNative(native), time.Now().Unix()) && expected > levelMedium {
 				expected = levelMedium
 			}
 			if level != expected {

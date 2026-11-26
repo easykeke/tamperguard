@@ -184,9 +184,15 @@ func main() {
 	logf("publisher account (allowed during grant): %s", publisher)
 
 	eng, err := enforcer.SelectKind("windows-acl", enforcer.Options{
-		PublisherSIDs:  []string{publisher},
-		StateDir:       stateDir,
-		IntegrityLevel: true,
+		PublisherSIDs: []string{publisher},
+		StateDir:      stateDir,
+		// The harness runs as an elevated administrator (High integrity), and
+		// Windows does not allow labelling objects above the caller's level. A
+		// System label therefore needs a SYSTEM agent; the "admin write denied
+		// by MIC" case is covered by run-mic-demo.ps1, which uses a SYSTEM
+		// scheduled task. Here High still proves DACL denial, grants and the
+		// self-heal path.
+		IntegrityLevel: "high",
 	})
 	if err != nil {
 		logf("ERROR: start windows-acl backend: %v", err)
