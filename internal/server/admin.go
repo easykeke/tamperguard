@@ -268,6 +268,10 @@ func (s *Server) handleCreatePublish(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	if in.SourceDir == "" || in.TargetDir == "" {
+		writeErr(w, http.StatusBadRequest, "invalid", "source_dir and target_dir are required")
+		return
+	}
 	if in.Delivery == "" {
 		in.Delivery = store.DeliveryLocal
 	}

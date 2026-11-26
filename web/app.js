@@ -225,10 +225,24 @@ const PUBLISH_FORM_HTML = `
       <p class="field-error hidden" data-error-for="publisher_id"></p>
     </div>
     <div class="field">
+      <label class="label" for="pub-delivery">发布方式</label>
+      <select id="pub-delivery" class="select">
+        <option value="local">本机写入（发布端与目标同机，或发布端可写目标目录）</option>
+        <option value="pull">跨机拉取（发布端上传制品，目标节点拉取安装）</option>
+      </select>
+      <p class="field-hint muted">跨机发布时，选择 pull：制品传到控制面，目标节点拉取并校验后安装。</p>
+    </div>
+    <div class="field">
       <label class="label" for="pub-source">源目录 <span class="req">*</span></label>
       <input id="pub-source" class="input" type="text" spellcheck="false"
              autocomplete="off" placeholder="如 /var/www/releases/v42">
       <p class="field-error hidden" data-error-for="source_dir"></p>
+    </div>
+    <div class="field">
+      <label class="label" for="pub-target">目标目录 <span class="req">*</span></label>
+      <input id="pub-target" class="input" type="text" spellcheck="false"
+             autocomplete="off" placeholder="如 /var/www/site">
+      <p class="field-error hidden" data-error-for="target_dir"></p>
     </div>
     <div class="field">
       <label class="label" for="pub-note">备注</label>
@@ -3031,6 +3045,7 @@ function publishView() {
       node_id: refs.nodeSelect,
       publisher_id: refs.publisherInput,
       source_dir: refs.sourceDirInput,
+      target_dir: refs.targetInput,
     };
     const input = inputs[key];
     if (input) input.classList.toggle('is-invalid', Boolean(message));
@@ -3056,6 +3071,8 @@ function publishView() {
     tr.appendChild(nodeTd);
 
     tr.appendChild(cell(textOr(req.publisher_id), 'mono cell-nowrap'));
+    const deliveryPull = String(req.delivery || 'local') === 'pull';
+    tr.appendChild(cellNode(badge(deliveryPull ? '跨机拉取' : '本机写入', deliveryPull ? 'info' : 'muted')));
     tr.appendChild(cell(textOr(req.source_dir), 'mono cell-ellipsis', textOr(req.source_dir)));
 
     const statusMeta = PUBLISH_STATUS_META[req.status] || { label: textOr(req.status), tone: 'muted' };
@@ -3096,6 +3113,7 @@ function publishView() {
       { label: '请求 ID' },
       { label: '节点' },
       { label: '发布端' },
+      { label: '方式' },
       { label: '源目录' },
       { label: '状态' },
       { label: '备注' },
@@ -3180,12 +3198,15 @@ function publishView() {
       node_id: refs.nodeSelect.value,
       publisher_id: refs.publisherInput.value.trim(),
       source_dir: refs.sourceDirInput.value.trim(),
+      target_dir: refs.targetInput.value.trim(),
       note: refs.noteInput.value.trim(),
+      delivery: refs.deliverySelect.value,
     };
     const problems = [];
     if (!values.node_id) problems.push({ key: 'node_id', message: '请选择目标节点。' });
     if (!values.publisher_id) problems.push({ key: 'publisher_id', message: '请输入发布端 ID。' });
     if (!values.source_dir) problems.push({ key: 'source_dir', message: '请输入源目录。' });
+    if (!values.target_dir) problems.push({ key: 'target_dir', message: '请输入目标目录。' });
     if (problems.length > 0) {
       problems.forEach(function (problem) {
         setFieldError(problem.key, problem.message);
@@ -3206,6 +3227,8 @@ function publishView() {
         : '发布请求已创建，等待发布端处理。', 'success');
       refs.publisherInput.value = '';
       refs.publisherSelect.value = '';
+      refs.targetInput.value = '';
+      if (refs.deliverySelect) refs.deliverySelect.value = 'local';
       refs.sourceDirInput.value = '';
       refs.noteInput.value = '';
       refs.nodeSelect.value = '';
@@ -3283,8 +3306,10 @@ function publishView() {
         nodeSelect: form.querySelector('#pub-node'),
         publisherInput: form.querySelector('#pub-publisher'),
         publisherSelect: form.querySelector('#pub-publisher'),
+        deliverySelect: form.querySelector('#pub-delivery'),
         endpointsBody: endpointsPanel.body,
         sourceDirInput: form.querySelector('#pub-source'),
+        targetInput: form.querySelector('#pub-target'),
         noteInput: form.querySelector('#pub-note'),
         submitBtn: form.querySelector('#pub-submit'),
         formError: form.querySelector('#pub-form-error'),
