@@ -76,7 +76,7 @@ Windows 没有 eBPF LSM，也没有 fanotify 等价物；用户态可用的同�
 | 自愈（无驱动替代） | 受保护目录有内容基线（内容寻址存储），由 `ReadDirectoryChangesW` 事件立即触发（亚秒级），并以 `TG_WIN_SCAN_SECONDS`（默认 30s）兜底：被修改/删除的文件回滚、基线中不存在的新文件删除，事件记 `tamper.restored`；发布窗口内的变更视为可信，窗口结束后成为新基线 | 需 state 目录可写；基线在安装/策略首次应用时生成 |
 | 服务加固 | 以 LocalSystem 运行、失败自动重启、服务 ACL 只允许 SYSTEM 停止/配置（管理员只能查询/启动） | `deploy/windows/install-service.ps1` |
 | 卸载/回滚 | `tg-agent unlock --state-dir ...` 恢复继承权限；Agent 退出或崩溃**不会**自动解锁（防止防护静默消失） |
-| 完整性级别（MIC，默认开启） | 受保护路径再打 **System** + `NO_WRITE_UP` 完整性标签（继承子对象）：System 完整性以下的进程（含**提权管理员**，其令牌是 High）即使 DACL 允许也写不进去；发布窗口内临时降为 Medium，让授权发布账号通过 DACL 授予写入 | 需要 `SeSecurityPrivilege`（管理员/SYSTEM 运行时可自动启用）；`--integrity=false` 关闭 |
+| 完整性级别（MIC，默认 `--integrity-level system`） | 受保护路径再打 **System** + `NO_WRITE_UP` 完整性标签（继承子对象）：System 完整性以下的进程（含**提权管理员**）即使 DACL 允许也写不进去；发布窗口内临时降为 Medium。**启动时会对 state 目录做一次写读自检**，宿主不支持则自动禁用并写入 capability 原因 | 需要 agent 以 SYSTEM 运行且宿主能正常保存完整性标签；本机（Win11 26100）实测写入不生效，已自动降级；`--integrity-level off` 关闭 |
 
 实测限制与后续路线：
 

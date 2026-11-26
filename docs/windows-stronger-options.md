@@ -32,7 +32,9 @@ Get-MpComputerStatus:
 Get-MpPreference -> 0x800106ba（Defender 服务未运行）
 ```
 
-结论：这台机器上 CFA 不可用；说明"依赖 Defender"的方案在真实环境里覆盖不全。官方文档也明确：CFA 要求 Defender Antivirus 处于 Active 模式且实时保护开启，Windows 10+/Server 2019+。
+结论：这台机器上 CFA 不可用；说明"依赖 Defender"的方案在真实环境里覆盖不全。
+
+同一台机器还实测了完整性标签（MIC）：`SetNamedSecurityInfo`/`SetFileSecurity` 均返回成功但 SACL 留空（SDDL `S:PAI`），`icacls` 仅支持 Low/Medium/High，System 直接报错。因此产品把 MIC 做成**启动自检、失败即降级**的可选层；管理员普通写入由严格 DACL 拦截（已实测），绕过行为由自愈回滚（已实测）。官方文档也明确：CFA 要求 Defender Antivirus 处于 Active 模式且实时保护开启，Windows 10+/Server 2019+。
 
 来源：[Controlled folder access overview](https://learn.microsoft.com/en-us/defender-endpoint/controlled-folder-access-overview)、[Configure CFA](https://learn.microsoft.com/en-us/defender-endpoint/controlled-folder-access-configure)
 

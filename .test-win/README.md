@@ -51,3 +51,12 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 严格模式要把受保护路径标为 **System**，Agent 必须以 **LocalSystem 服务**运行
 （`deploy/windows/install-service.ps1`）；以普通管理员运行时会自动降级为 High，
 并在日志与 capability 里注明。
+
+## 最近一次验证结果（2026-11-26，Windows 11 26100）
+
+| 测试 | 结果 |
+|---|---|
+| `run-test.ps1`（SYSTEM 任务） | **PASS**：严格 DACL 拒绝管理员覆盖/新建；发布窗口授权写入、撤销后拒绝；管理员绕过修改被自愈还原并记 `tamper.restored`；`unlock` 恢复维护 |
+| `run-mic-demo.ps1` | **SKIP**：本机写入完整性标签不生效（系统接受但 SACL 为空），脚本按设计跳过 |
+
+MIC 在能正常保存完整性标签的 Windows 上通过 `--integrity-level system` 启用；Agent 需以 LocalSystem 服务运行（`deploy/windows/install-service.ps1`）。
