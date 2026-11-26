@@ -96,6 +96,8 @@ func cmdEnroll(args []string) error {
 	publisherUIDs := fs.String("publisher-uids", "0", "comma-separated uids allowed to use a live release grant")
 	publisherSIDs := fs.String("publisher-sids", "", "comma-separated Windows accounts/SIDs allowed to use a live grant")
 	tpmAKPub := fs.String("tpm-ak-pub", "", "PEM file with the TPM attestation key public key (enables TPM quote verification)")
+	tpmAutoAK := fs.Bool("tpm-auto-ak", false, "create an EK/AK on the TPM and register the AK public key automatically")
+	tpmTCTI := fs.String("tpm-tcti", "", "TPM2 TCTI for --tpm-auto-ak, e.g. device:/dev/tpmrm0 or swtpm:host=127.0.0.1,port=2321")
 	_ = fs.Parse(args)
 	tpmPub := ""
 	if *tpmAKPub != "" {
@@ -104,6 +106,15 @@ func cmdEnroll(args []string) error {
 			return fmt.Errorf("read --tpm-ak-pub: %w", err)
 		}
 		tpmPub = string(raw)
+	}
+	akCtx := ""
+	if *tpmAutoAK {
+		ctxPath, pem, err := agent.ProvisionAK(*stateDir, *tpmTCTI)
+		if err != nil {
+			return fmt.Errorf("auto-provision TPM AK: %w", err)
+		}
+		akCtx, tpmPub = ctxPath, pem
+		fmt.Printf("TPM AK provisioned: %s\n", ctxPath)
 	}
 
 	state, err := agent.Enroll(context.Background(), agent.EnrollOptions{
@@ -118,6 +129,8 @@ func cmdEnroll(args []string) error {
 		PublisherUIDs:  parseIntList(*publisherUIDs),
 		PublisherSIDs:  parseStringList(*publisherSIDs),
 		TPMAKPub:       tpmPub,
+		TPMAKCtx:       akCtx,
+		TPMTCTI:        *tpmTCTI,
 	})
 	if err != nil {
 		return err
@@ -412,6 +425,12 @@ func cmdRun(args []string) error {
 	state, err := config.LoadAgentState(*stateDir)
 	if err != nil {
 		return err
+	}
+	if *tpmAK == "" {
+		*tpmAK = state.TPMAKCtx
+	}
+	if *tpmTCTI == "" {
+		*tpmTCTI = state.TPMTCTI
 	}
 	enf, err := enforcer.SelectKind(*backend, enforcer.Options{
 		PublisherUIDs:  state.PublisherUIDs,

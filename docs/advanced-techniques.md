@@ -194,13 +194,17 @@ Agent 每次心跳附带启动证据摘要：Secure Boot 状态（efivars）、T
 **TPM quote（已实现）**：控制面在心跳里下发一次性 nonce，Agent 用 `tpm2-tools` 让 TPM 对 `nonce + PCR[0,4,7]` 签名，上报 `TPMS_ATTEST + TPMT_SIGNATURE + PCR 值`；控制面解析结构、校验 nonce 与 PCR 摘要，再用注册的 AK 公钥验证 ECDSA 签名，通过后记录 `attestation.verified=true`。这抵抗了"进程替换后伪造 boot_digest"：没有 AK 私钥签不出有效 quote。
 
 ```bash
-# 注册时登记 AK 公钥
+# 注册时由 Agent 自动创建 EK/AK 并登记 AK 公钥（推荐）
+sudo tg-agent enroll ... --tpm-auto-ak --tpm-tcti device:/dev/tpmrm0
+# 运行时不需再传 TPM 参数：AK 上下文与 TCTI 已保存在 agent.json
+sudo tg-agent run --state-dir ...
+
+# 兼容手工准备的 AK
 sudo tg-agent enroll ... --tpm-ak-pub ak.pem
-# 运行时提供 AK 上下文与 TCTI（真机 /dev/tpmrm0，测试用 swtpm）
-sudo tg-agent run --state-dir ... --tpm-ak-ctx ak.ctx --tpm-tcti device:/dev/tpmrm0
+sudo tg-agent run ... --tpm-ak-ctx ak.ctx --tpm-tcti device:/dev/tpmrm0
 ```
 
-实测（swtpm 软件 TPM，真实 TPM2 协议）：`make e2e-tpm-quote` PASS。真机 TPM 与 Windows TBS 后端尚未验证；nonce 一次性、5 分钟过期，重放会被拒。
+实测（swtpm 软件 TPM，真实 TPM2 协议，含自动 AK 签发）：`make e2e-tpm-quote` PASS。**物理 TPM 真机尚未验证**：WSL 无 `/dev/tpm*`，Windows TBS 后端尚未实现；nonce 一次性、5 分钟过期，重放会被拒。
 
 实测（WSL2，无 TPM/efivars）：
 

@@ -474,13 +474,14 @@ sudo tg-agent selfcheck --state-dir /var/lib/tamperguard-agent
 **TPM quote（可选）**：如果主机有 TPM 2.0，可让控制面对启动状态做密码学验证：
 
 ```bash
-# 注册时登记 AK 公钥（PEM）
-sudo tg-agent enroll ... --tpm-ak-pub /path/ak.pem
+# 注册时自动创建 EK/AK 并登记公钥（推荐；真机示例）
+sudo tg-agent enroll ... --tpm-auto-ak --tpm-tcti device:/dev/tpmrm0
 
-# 运行时指定 AK 上下文与 TCTI（真机示例；测试可用 swtpm:host=...,port=...）
-sudo tg-agent run --state-dir /var/lib/tamperguard-agent \
-  --tpm-ak-ctx /path/ak.ctx --tpm-tcti device:/dev/tpmrm0
+# 运行时无需 TPM 参数：AK 上下文与 TCTI 已写入 agent.json
+sudo tg-agent run --state-dir /var/lib/tamperguard-agent
 ```
+
+也可以手工准备 AK：注册用 `--tpm-ak-pub ak.pem`，运行时用 `--tpm-ak-ctx`/`--tpm-tcti`。
 
 控制面在心跳里下发一次性 nonce，Agent 用 TPM 对 `nonce + PCR[0,4,7]` 签名，控制面验证签名与 PCR 摘要后写入 `attestation.verified`，节点详情「TPM 证明」可见。Linux 上不阻止 root 替换二进制，但会让替换留下审计痕迹；Windows 安装脚本已把程序与状态目录限制为 SYSTEM 完全控制、Administrators 只读。
 

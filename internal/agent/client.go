@@ -502,6 +502,8 @@ type EnrollOptions struct {
 	// TPMAKPub is the PEM-encoded TPM attestation key public key, if the host
 	// should be able to submit TPM quotes.
 	TPMAKPub       string
+	TPMAKCtx       string
+	TPMTCTI        string
 	ServerURL      string
 	BootstrapToken string
 	Role           string
@@ -650,6 +652,8 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*config.AgentState, error)
 		PollSeconds:   poll,
 		PublisherUIDs: opts.PublisherUIDs,
 		PublisherSIDs: opts.PublisherSIDs,
+		TPMAKCtx:      opts.TPMAKCtx,
+		TPMTCTI:       opts.TPMTCTI,
 	}
 	if err := config.SaveAgentState(opts.StateDir, state); err != nil {
 		return nil, err

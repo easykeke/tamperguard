@@ -10,6 +10,8 @@
 
 - **内核级 Agent 自保护**：eBPF 新增 `tg_self_pids` 映射，仅 Agent 进程可写自身 unit/config（二进制由自检与权限覆盖）；root 修改返回 EPERM，策略同步自动合并自身路径；`make e2e-selfprotect` 验证。
 
+- **TPM AK 自动签发**：`tg-agent enroll --tpm-auto-ak --tpm-tcti ...` 自动创建 EK/AK、导出公钥登记到控制面，AK 上下文与 TCTI 存入 agent.json，运行时无需再传参数。swtpm 端到端通过。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。

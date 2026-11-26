@@ -43,12 +43,7 @@ swtpm socket --tpm2 --tpmstate dir="$DATA/tpm" \
 SWTPM_PID=$!
 for _ in $(seq 1 30); do (exec 3<>/dev/tcp/127.0.0.1/2321) 2>/dev/null && break; sleep 0.2; done
 export TPM2TOOLS_TCTI="$TCTI"
-cd "$DATA/keys" || exit 1
-tpm2_createek -G ecc -c ek.ctx > "$DATA/prov.log" 2>&1 || { cat "$DATA/prov.log"; bad "create EK"; exit 1; }
-tpm2_createak -C ek.ctx -G ecc -g sha256 -s ecdsa -c ak.ctx -u ak.pem -f pem >> "$DATA/prov.log" 2>&1 || { cat "$DATA/prov.log"; bad "create AK"; exit 1; }
-# The TPM only has a few transient slots; release the provisioning handles.
-tpm2_flushcontext -t >> "$DATA/prov.log" 2>&1 || true
-[ -s ak.pem ] && ok "AK provisioned" || bad "AK public key missing"
+ok "software TPM started (AK will be provisioned by the agent)"
 
 say "control plane"
 cd "$REPO" || exit 1
@@ -62,12 +57,15 @@ curl -sk "$BASE/healthz" >/dev/null && ok "server healthy" || { bad "server fail
 
 say "enrol with the AK public key"
 "$BIN/tg-agent" enroll --server "$BASE" --bootstrap "$PROT_TOK" --ca "$DATA/server/keys/ca.crt" \
-  --state-dir "$DATA/protect" --poll 2 --tpm-ak-pub "$DATA/keys/ak.pem" > "$DATA/enroll.log" 2>&1 \
-  && ok "protect enrolled with AK" || { cat "$DATA/enroll.log"; bad "enroll"; exit 1; }
+  --state-dir "$DATA/protect" --poll 2 --tpm-auto-ak --tpm-tcti "$TCTI" > "$DATA/enroll.log" 2>&1 \
+  && ok "protect enrolled with an auto-provisioned AK" || { cat "$DATA/enroll.log"; bad "enroll"; exit 1; }
+grep -q 'TPM AK provisioned' "$DATA/enroll.log" && ok "agent created the AK itself" || bad "auto-provision message missing"
+jq -e '.tpm_ak_ctx and .tpm_tcti' "$DATA/protect/agent.json" >/dev/null 2>&1 \
+  && ok "AK context and TCTI persisted in agent state" || { cat "$DATA/protect/agent.json"; bad "state missing TPM fields"; }
 
 say "agent answers the nonce with a TPM quote"
-"$BIN/tg-agent" run --state-dir "$DATA/protect" \
-  --tpm-ak-ctx "$DATA/keys/ak.ctx" --tpm-tcti "$TCTI" > "$DATA/agent.log" 2>&1 &
+# No --tpm-* flags here: the agent must reuse what enrolment provisioned.
+"$BIN/tg-agent" run --state-dir "$DATA/protect" > "$DATA/agent.log" 2>&1 &
 AGENT_PID=$!
 VERIFIED=""
 for _ in $(seq 1 60); do

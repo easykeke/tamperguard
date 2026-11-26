@@ -157,6 +157,12 @@ type AgentState struct {
 	// PublisherSIDs is the Windows equivalent: account SIDs or names allowed
 	// to consume a grant while a release token is live.
 	PublisherSIDs []string `json:"publisher_sids,omitempty"`
+	// TPMAKCtx is the TPM attestation key context created during enrolment
+	// (empty when TPM attestation is not configured).
+	TPMAKCtx string `json:"tpm_ak_ctx,omitempty"`
+	// TPMTCTI is the TPM2 TCTI used for quotes, e.g. device:/dev/tpmrm0 or
+	// swtpm:host=127.0.0.1,port=2321.
+	TPMTCTI string `json:"tpm_tcti,omitempty"`
 }
 
 // LoadAgentState reads <stateDir>/agent.json.
