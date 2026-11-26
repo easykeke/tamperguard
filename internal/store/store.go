@@ -258,6 +258,19 @@ func (s *Store) migrate() error {
 			ak_pub TEXT NOT NULL DEFAULT '',
 			attestation TEXT NOT NULL DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS sync_profiles (
+			id TEXT PRIMARY KEY,
+			publisher_id TEXT NOT NULL,
+			node_id TEXT NOT NULL,
+			source_dir TEXT NOT NULL,
+			target_dir TEXT NOT NULL,
+			mode TEXT NOT NULL DEFAULT 'full',
+			delivery TEXT NOT NULL DEFAULT 'pull',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS policies (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -1004,6 +1017,109 @@ func (s *Store) DecideUninstall(id, status, ticket, decidedBy string) error {
 	_, err := s.db.Exec(`UPDATE uninstall_requests SET status=?, ticket=?, decided_by=?, decided_at=?
 		WHERE id=? AND status='pending'`, status, ticket, decidedBy, now(), id)
 	return err
+}
+
+// SyncProfile is a console-managed sync target: the publisher only has to
+// trigger it, the paths/mode/delivery live on the control plane.
+type SyncProfile struct {
+	ID          string `json:"id"`
+	PublisherID string `json:"publisher_id"`
+	NodeID      string `json:"node_id"`
+	SourceDir   string `json:"source_dir"`
+	TargetDir   string `json:"target_dir"`
+	Mode        string `json:"mode"`
+	Delivery    string `json:"delivery"`
+	Enabled     bool   `json:"enabled"`
+	CreatedBy   string `json:"created_by"`
+	CreatedAt   int64  `json:"created_at"`
+	UpdatedAt   int64  `json:"updated_at"`
+}
+
+// CreateSyncProfile inserts one profile.
+func (s *Store) CreateSyncProfile(p SyncProfile) (SyncProfile, error) {
+	p.CreatedAt = now()
+	p.UpdatedAt = p.CreatedAt
+	enabled := 0
+	if p.Enabled {
+		enabled = 1
+	}
+	_, err := s.db.Exec(`INSERT INTO sync_profiles
+		(id, publisher_id, node_id, source_dir, target_dir, mode, delivery, enabled, created_by, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.PublisherID, p.NodeID, p.SourceDir, p.TargetDir, p.Mode, p.Delivery,
+		enabled, p.CreatedBy, p.CreatedAt, p.UpdatedAt)
+	return p, err
+}
+
+const syncProfileCols = `id, publisher_id, node_id, source_dir, target_dir, mode, delivery, enabled, created_by, created_at, updated_at`
+
+func scanSyncProfile(sc interface{ Scan(...any) error }) (SyncProfile, error) {
+	var p SyncProfile
+	var enabled int
+	err := sc.Scan(&p.ID, &p.PublisherID, &p.NodeID, &p.SourceDir, &p.TargetDir,
+		&p.Mode, &p.Delivery, &enabled, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
+	p.Enabled = enabled != 0
+	return p, err
+}
+
+// ListSyncProfiles lists all profiles (admin view).
+func (s *Store) ListSyncProfiles() ([]SyncProfile, error) {
+	rows, err := s.db.Query(`SELECT ` + syncProfileCols + ` FROM sync_profiles ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SyncProfile
+	for rows.Next() {
+		p, err := scanSyncProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ListSyncProfilesForPublisher lists enabled profiles owned by one publisher.
+func (s *Store) ListSyncProfilesForPublisher(publisherID string) ([]SyncProfile, error) {
+	rows, err := s.db.Query(`SELECT `+syncProfileCols+` FROM sync_profiles
+		WHERE publisher_id=? AND enabled=1 ORDER BY created_at`, publisherID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SyncProfile
+	for rows.Next() {
+		p, err := scanSyncProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// GetSyncProfile loads one profile.
+func (s *Store) GetSyncProfile(id string) (SyncProfile, error) {
+	row := s.db.QueryRow(`SELECT `+syncProfileCols+` FROM sync_profiles WHERE id=?`, id)
+	p, err := scanSyncProfile(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SyncProfile{}, ErrNotFound
+	}
+	return p, err
+}
+
+// DeleteSyncProfile removes a profile.
+func (s *Store) DeleteSyncProfile(id string) error {
+	res, err := s.db.Exec(`DELETE FROM sync_profiles WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ---------- tokens ----------

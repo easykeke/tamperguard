@@ -217,6 +217,9 @@ func (s *Server) routes() {
 	m.Handle("DELETE /api/v1/policies/{id}", s.admin(s.handleDeletePolicy))
 
 	m.Handle("GET /api/v1/publish-requests", s.admin(s.handleListPublish))
+	m.Handle("GET /api/v1/sync-profiles", s.admin(s.handleListSyncProfiles))
+	m.Handle("POST /api/v1/sync-profiles", s.admin(s.handleCreateSyncProfile))
+	m.Handle("DELETE /api/v1/sync-profiles/{id}", s.admin(s.handleDeleteSyncProfile))
 	m.Handle("POST /api/v1/bootstrap-tokens", s.admin(s.handleCreateBootstrapToken))
 	m.Handle("POST /api/v1/publish-requests", s.admin(s.handleCreatePublish))
 	m.Handle("GET /api/v1/publish-requests/{id}", s.admin(s.handleGetPublish))
@@ -236,6 +239,7 @@ func (s *Server) routes() {
 
 	m.Handle("POST /api/v1/publish/sync", s.agent("publish", s.handlePublisherSync))
 	m.Handle("GET /api/v1/publish/nodes", s.agent("publish", s.handlePublisherNodes))
+	m.Handle("GET /api/v1/publish/profiles", s.agent("publish", s.handlePublisherProfiles))
 	m.Handle("GET /api/v1/publish/current", s.agent("publish", s.handlePublisherCurrent))
 	m.Handle("GET /api/v1/publish/{id}", s.agent("publish", s.handlePublishGet))
 	m.Handle("GET /api/v1/publish/pending", s.agent("publish", s.handlePublishPending))

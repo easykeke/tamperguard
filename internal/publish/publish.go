@@ -255,12 +255,18 @@ func (p *Publisher) verifyWritten(req store.PublishRequest, man *Manifest) error
 
 // SyncOptions describes a publisher-triggered release.
 type SyncOptions struct {
+	ProfileID string
 	NodeID    string
 	SourceDir string
 	TargetDir string
 	Note      string
 	Mode      string
 	Delivery  string
+}
+
+// SyncProfiles lists the console-managed sync profiles for this publisher.
+func (p *Publisher) SyncProfiles(ctx context.Context) ([]agent.SyncProfile, error) {
+	return p.client.SyncProfiles(ctx)
 }
 
 // ProtectNodes lists target nodes for the interactive setup wizard.
@@ -271,7 +277,13 @@ func (p *Publisher) ProtectNodes(ctx context.Context) ([]agent.ProtectNode, erro
 // TriggerSync creates a release from the publisher host and waits for its
 // completion (manual trigger, no console request needed).
 func (p *Publisher) TriggerSync(ctx context.Context, opts SyncOptions, timeout time.Duration) error {
-	req, err := p.client.PublishSync(ctx, opts.NodeID, opts.SourceDir, opts.TargetDir, opts.Note, opts.Mode, opts.Delivery)
+	var req *store.PublishRequest
+	var err error
+	if opts.ProfileID != "" {
+		req, err = p.client.PublishSyncProfile(ctx, opts.ProfileID, opts.SourceDir, opts.Note)
+	} else {
+		req, err = p.client.PublishSync(ctx, opts.NodeID, opts.SourceDir, opts.TargetDir, opts.Note, opts.Mode, opts.Delivery)
+	}
 	if err != nil {
 		return err
 	}

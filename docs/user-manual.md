@@ -298,20 +298,20 @@ curl -sk -b cookies -H 'Content-Type: application/json' \
    - 逐文件复核哈希后原子写入（临时文件 + rename）；
 3. 完成状态变为 `done`；管理端可看到令牌、耗时、文件数。
 
-### 6.2.1 发布端手动触发（无需管理端建请求）
+### 6.2.1 同步路径在管理端配置，发布端只触发
 
-发布端可以自己发起一次同步并等待结果，适合脚本/CI 直接调用：
+发布路径不再写在发布端命令行里：管理端「发布」页 →「同步配置」定义一条同步任务（发布端、目标节点、源目录、目标目录、模式、方式），发布端只需要执行：
 
 ```bash
-tg-publish sync --state-dir /var/lib/tamperguard-publish \
-  --node n_xxxxxxxx --source /srv/release --target /var/www/site \
-  --mode incremental --delivery pull --note "CI #123" --timeout 5m
+tg-publish sync --state-dir /var/lib/tamperguard-publish
 ```
 
-- `--mode full|incremental`：同上表；
-- `--delivery pull|local`：`pull`（默认）把制品上传控制面，由目标节点拉取；`local` 要求发布端能直接写目标目录；
-- 命令会创建请求、立即处理、轮询到 `done`/`failed` 后退出（失败返回非零）；
-- 发布端服务（`tg-publish run`）不需要停，两者可同时存在。
+如果有多个配置，会编号让选择；也可以用 `--profile sp_xxx` 指定。发布端本地只保存缓存，不再需要复制节点 ID 或路径。
+
+- 管理端改了路径/模式后，发布端下一次 `tg-publish sync` 自动生效；
+- 管理端没有配置时，才回退到发布端本地向导（旧行为）；
+- 脚本/CI 仍可用显式参数（`--node/--source/--target/--mode/--delivery`）覆盖，或 `--profile`；
+- 命令会创建请求、立即处理、等待 `done`/`failed` 后退出（失败返回非零），不影响 `tg-publish run` 常驻服务。
 
 ### 6.3 跨机发布（pull）
 

@@ -14,6 +14,7 @@ import (
 func (s *Server) handlePublisherSync(w http.ResponseWriter, r *http.Request) {
 	publisherID, _ := clientCN(r)
 	var in struct {
+		ProfileID string `json:"profile_id"`
 		NodeID    string `json:"node_id"`
 		SourceDir string `json:"source_dir"`
 		TargetDir string `json:"target_dir"`
@@ -23,6 +24,20 @@ func (s *Server) handlePublisherSync(w http.ResponseWriter, r *http.Request) {
 	}
 	if !decodeJSON(w, r, &in) {
 		return
+	}
+	if in.ProfileID != "" {
+		profile, err := s.st.GetSyncProfile(in.ProfileID)
+		if err != nil || profile.PublisherID != publisherID || !profile.Enabled {
+			writeErr(w, http.StatusNotFound, "not_found", "sync profile not found for this publisher")
+			return
+		}
+		in.NodeID = profile.NodeID
+		in.TargetDir = profile.TargetDir
+		in.Mode = profile.Mode
+		in.Delivery = profile.Delivery
+		if in.SourceDir == "" {
+			in.SourceDir = profile.SourceDir
+		}
 	}
 	if in.SourceDir == "" || in.TargetDir == "" {
 		writeErr(w, http.StatusBadRequest, "invalid", "source_dir and target_dir are required")

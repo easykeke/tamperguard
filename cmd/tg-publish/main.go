@@ -95,6 +95,7 @@ func cmdSync(args []string) error {
 	note := fs.String("note", "", "release note")
 	timeout := fs.Duration("timeout", 5*time.Minute, "how long to wait for completion")
 	reset := fs.Bool("reset", false, "re-run the interactive setup")
+	profileID := fs.String("profile", "", "use a console-managed sync profile by id")
 	verity := fs.Bool("verity", false, "enable fs-verity on locally installed files")
 	flagsOnly, positional := splitSyncArgs(args)
 	_ = fs.Parse(flagsOnly)
@@ -146,7 +147,65 @@ func cmdSync(args []string) error {
 		cfg.Delivery = "pull"
 	}
 
-	needWizard := *reset || cfg.NodeID == "" || cfg.SourceDir == "" || cfg.TargetDir == ""
+	explicit := *nodeID != "" || *source != "" || *target != "" || *mode != "" || *delivery != ""
+	if *profileID != "" || !explicit {
+		listCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		profiles, perr := p.SyncProfiles(listCtx)
+		cancel()
+		if perr != nil {
+			if *profileID != "" {
+				return fmt.Errorf("读取管理端同步配置失败: %w", perr)
+			}
+			logger.Warn("无法读取管理端同步配置，使用本地设置", "err", perr)
+		}
+		if len(profiles) > 0 {
+			chosen := profiles[0]
+			if *profileID != "" {
+				found := false
+				for _, item := range profiles {
+					if item.ID == *profileID {
+						chosen, found = item, true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("发布端没有 id 为 %s 的同步配置", *profileID)
+				}
+			} else if len(profiles) > 1 {
+				fmt.Println("请选择管理端同步配置：")
+				for i, item := range profiles {
+					fmt.Printf("  %d) %s → %s（%s，%s）\n", i+1, item.SourceDir, item.TargetDir, modeLabel(item.Mode), deliveryLabel(item.Delivery))
+				}
+				choice, err := ask("序号", "1")
+				if err != nil {
+					return err
+				}
+				var idx int
+				fmt.Sscanf(strings.TrimSpace(choice), "%d", &idx)
+				if idx < 1 || idx > len(profiles) {
+					return fmt.Errorf("无效的序号 %q", choice)
+				}
+				chosen = profiles[idx-1]
+			}
+			cfg.ProfileID = chosen.ID
+			cfg.NodeID = chosen.NodeID
+			cfg.SourceDir = chosen.SourceDir
+			cfg.TargetDir = chosen.TargetDir
+			cfg.Mode = chosen.Mode
+			cfg.Delivery = chosen.Delivery
+			if *source != "" {
+				cfg.SourceDir = *source
+			}
+			if posSource != "" {
+				cfg.SourceDir = posSource
+			}
+			fmt.Printf("使用管理端同步配置 %s\n", chosen.ID)
+		} else if *profileID != "" {
+			return fmt.Errorf("管理端没有为该发布端配置同步任务")
+		}
+	}
+
+	needWizard := *reset || (cfg.ProfileID == "" && (cfg.NodeID == "" || cfg.SourceDir == "" || cfg.TargetDir == ""))
 	if needWizard {
 		if err := runWizard(p, &cfg); err != nil {
 			return err

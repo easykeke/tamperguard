@@ -108,6 +108,10 @@ agents reject a snapshot whose signature or digest is wrong.
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | GET | `/publish-requests?status=` | — | List |
+| GET | `/sync-profiles` | — | 同步配置列表（管理端） |
+| POST | `/sync-profiles` | `{publisher_id,node_id,source_dir,target_dir,mode,delivery}` | 新建同步配置（路径/模式在管理端定义） |
+| DELETE | `/sync-profiles/{id}` | — | 删除同步配置 |
+| GET | `/publish/profiles` | publish 角色 mTLS | 该发布端可用的同步配置 |
 | POST | `/bootstrap-tokens` | `{"role":"protect\|publish"}` | 生成一次性注册令牌（仅保存摘要，明文只返回一次），用于管理端给节点/发布端下发注册命令 |
 | POST | `/publish-requests` | `{"node_id","publisher_id","source_dir","target_dir","delivery":"local\|pull","note"}` | `delivery` defaults to `local`; `pull` means the target node fetches the artefacts |
 | GET | `/publish-requests/{id}` | — | Request detail |
@@ -117,7 +121,7 @@ Publisher-agent endpoints (mTLS, role=publish):
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| POST | `/publish/sync` | publish 角色 mTLS | `{node_id,source_dir,target_dir,mode,delivery,note}`：发布端自行创建并触发一次发布，返回请求对象 |
+| POST | `/publish/sync` | publish 角色 mTLS | `{profile_id?,node_id,source_dir?,target_dir,mode,delivery,note}`：发布端自行触发；给 `profile_id` 时使用管理端配置的路径与模式，返回请求对象 |
 | GET | `/publish/current?node_id=` | publish 角色 mTLS | 该节点最近一次成功发布的清单（增量比对基线） |
 | GET | `/publish/{id}` | publish 角色 mTLS | 查询自己创建的发布请求（CLI 等待用） |
 | GET | `/publish/pending` | — | Requests assigned to the calling publisher |

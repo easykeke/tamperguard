@@ -466,6 +466,41 @@ func (c *Client) ProtectNodes(ctx context.Context) ([]ProtectNode, error) {
 	return out, nil
 }
 
+// SyncProfile is a console-managed sync target owned by one publisher.
+type SyncProfile struct {
+	ID          string `json:"id"`
+	PublisherID string `json:"publisher_id"`
+	NodeID      string `json:"node_id"`
+	SourceDir   string `json:"source_dir"`
+	TargetDir   string `json:"target_dir"`
+	Mode        string `json:"mode"`
+	Delivery    string `json:"delivery"`
+	Enabled     bool   `json:"enabled"`
+}
+
+// SyncProfiles lists the enabled profiles assigned to this publisher.
+func (c *Client) SyncProfiles(ctx context.Context) ([]SyncProfile, error) {
+	var out []SyncProfile
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/publish/profiles", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PublishSyncProfile triggers a console-configured profile. Paths and mode come
+// from the control plane; only the source directory may be overridden locally.
+func (c *Client) PublishSyncProfile(ctx context.Context, profileID, sourceOverride, note string) (*store.PublishRequest, error) {
+	body := map[string]string{"profile_id": profileID, "note": note}
+	if sourceOverride != "" {
+		body["source_dir"] = sourceOverride
+	}
+	var out store.PublishRequest
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/publish/sync", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // PublishSync creates a release request from the publisher itself (manual
 // trigger), instead of an administrator creating one in the console.
 func (c *Client) PublishSync(ctx context.Context, nodeID, sourceDir, targetDir, note, mode, delivery string) (*store.PublishRequest, error) {

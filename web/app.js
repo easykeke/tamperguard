@@ -263,6 +263,45 @@ const PUBLISH_FORM_HTML = `
   </div>
 </form>`;
 
+const SYNC_PROFILE_HTML = `
+<form id="sync-form" class="sync-form" novalidate>
+  <div class="form-grid">
+    <div class="field">
+      <label class="label" for="sp-publisher">发布端 <span class="req">*</span></label>
+      <select id="sp-publisher" class="select"></select>
+    </div>
+    <div class="field">
+      <label class="label" for="sp-node">目标节点 <span class="req">*</span></label>
+      <select id="sp-node" class="select"></select>
+    </div>
+    <div class="field">
+      <label class="label" for="sp-source">源目录 <span class="req">*</span></label>
+      <input id="sp-source" class="input" type="text" spellcheck="false" placeholder="发布端主机上的目录，如 /srv/release">
+    </div>
+    <div class="field">
+      <label class="label" for="sp-target">目标目录 <span class="req">*</span></label>
+      <input id="sp-target" class="input" type="text" spellcheck="false" placeholder="被保护主机上的目录，如 /var/www/site">
+    </div>
+    <div class="field">
+      <label class="label" for="sp-mode">模式</label>
+      <select id="sp-mode" class="select">
+        <option value="full">全量</option>
+        <option value="incremental">增量</option>
+      </select>
+    </div>
+    <div class="field">
+      <label class="label" for="sp-delivery">方式</label>
+      <select id="sp-delivery" class="select">
+        <option value="pull">跨机拉取</option>
+        <option value="local">本机写入</option>
+      </select>
+    </div>
+  </div>
+  <div class="form-actions form-actions--inline">
+    <button id="sp-save" class="btn btn--primary" type="submit">保存同步配置</button>
+  </div>
+</form>`;
+
 const REVOCATION_FORM_HTML = `
 <form id="rev-form" class="rev-form" novalidate>
   <div id="rev-form-error" class="notice notice--danger hidden" role="alert"></div>
@@ -2890,6 +2929,7 @@ function publishView() {
   let pollTimer = null;
   let creating = false;
   let refs = null;
+  let syncProfiles = [];
 
   function nodeHostname(nodeId) {
     const list = Array.isArray(nodes) ? nodes : [];
@@ -2969,6 +3009,123 @@ function publishView() {
     }
   }
 
+  function protectNodeList() {
+    return (Array.isArray(nodes) ? nodes : []).filter(function (n) {
+      return n && n.role !== 'publish';
+    });
+  }
+
+  function renderSyncOptions() {
+    if (!refs || !refs.syncPublisher) return;
+    const pubs = publishNodes();
+    const prot = protectNodeList();
+    function fill(sel, list, placeholder) {
+      if (!sel) return;
+      const prev = sel.value;
+      clear(sel);
+      const opt = el('option', null, placeholder);
+      opt.value = '';
+      sel.appendChild(opt);
+      list.forEach(function (n) {
+        const o = el('option', null, textOr(n.hostname, n.id) + '（' + textOr(n.id) + '）');
+        o.value = String(n.id);
+        sel.appendChild(o);
+      });
+      sel.value = prev;
+    }
+    fill(refs.syncPublisher, pubs, '请选择发布端');
+    fill(refs.syncNode, prot, '请选择目标节点');
+  }
+
+  function renderSyncProfiles() {
+    if (!refs || !refs.syncBody) return;
+    const body = refs.syncBody;
+    clear(body);
+    if (!syncProfiles.length) {
+      body.appendChild(el('p', 'muted', '尚未配置同步任务。配置后，发布端只需执行 tg-publish sync 即可。'));
+      return;
+    }
+    const built = createTable([
+      { label: '发布端' },
+      { label: '目标节点' },
+      { label: '源目录' },
+      { label: '目标目录' },
+      { label: '模式' },
+      { label: '方式' },
+      { label: '操作' },
+    ], 'data-table--compact');
+    syncProfiles.forEach(function (sp) {
+      const tr = el('tr');
+      tr.appendChild(cell(textOr(sp.publisher_id), 'mono cell-ellipsis'));
+      tr.appendChild(cell(textOr(sp.node_id), 'mono cell-ellipsis'));
+      tr.appendChild(cell(textOr(sp.source_dir), 'mono cell-ellipsis', textOr(sp.source_dir)));
+      tr.appendChild(cell(textOr(sp.target_dir), 'mono cell-ellipsis', textOr(sp.target_dir)));
+      tr.appendChild(cell(sp.mode === 'incremental' ? '增量' : '全量'));
+      tr.appendChild(cell(sp.delivery === 'local' ? '本机写入' : '跨机拉取'));
+      const td = el('td');
+      td.appendChild(button('删除', {
+        variant: 'ghost',
+        size: 'sm',
+        onClick: function () { deleteSyncProfile(sp); },
+      }));
+      tr.appendChild(td);
+      built.tbody.appendChild(tr);
+    });
+    const wrap = el('div', 'table-wrap');
+    wrap.appendChild(built.table);
+    body.appendChild(wrap);
+  }
+
+  async function loadSyncProfiles() {
+    try {
+      const data = await api('GET', '/sync-profiles', { signal: ac.signal });
+      syncProfiles = Array.isArray(data) ? data : [];
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      syncProfiles = [];
+      toast(err.message || '加载同步配置失败。', 'error');
+    }
+    renderSyncProfiles();
+  }
+
+  async function saveSyncProfile(event) {
+    event.preventDefault();
+    const body = {
+      publisher_id: refs.syncPublisher.value,
+      node_id: refs.syncNode.value,
+      source_dir: refs.syncSource.value.trim(),
+      target_dir: refs.syncTarget.value.trim(),
+      mode: refs.syncMode.value,
+      delivery: refs.syncDelivery.value,
+    };
+    if (!body.publisher_id || !body.node_id || !body.source_dir || !body.target_dir) {
+      toast('请填写发布端、目标节点、源目录和目标目录。', 'error');
+      return;
+    }
+    try {
+      await api('POST', '/sync-profiles', { body: body, signal: ac.signal });
+      toast('同步配置已保存。发布端执行 tg-publish sync 即可触发。', 'success');
+      refs.syncSource.value = '';
+      refs.syncTarget.value = '';
+      await loadSyncProfiles();
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '保存同步配置失败。', 'error');
+    }
+  }
+
+  async function deleteSyncProfile(sp) {
+    if (!window.confirm('删除这条同步配置？')) return;
+    try {
+      await api('DELETE', '/sync-profiles/' + encodeURIComponent(sp.id), { signal: ac.signal });
+      toast('已删除。', 'success');
+      await loadSyncProfiles();
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '删除失败。', 'error');
+    }
+  }
+
   function renderNodeOptions() {
     if (!refs) return;
     const previous = refs.nodeSelect.value;
@@ -2985,6 +3142,7 @@ function publishView() {
     refs.nodeSelect.value = previous;
     renderPublisherOptions();
     renderEndpoints();
+    renderSyncOptions();
 
     const errorBox = refs.nodesError;
     clear(errorBox);
@@ -3289,6 +3447,12 @@ function publishView() {
       }));
       host.appendChild(endpointsPanel.panel);
 
+      const syncPanel = buildPanel('同步配置（管理端定义，发布端只触发）', { bodyClass: 'panel__body' });
+      syncPanel.body.innerHTML = SYNC_PROFILE_HTML;
+      const syncBody = el('div', '');
+      syncPanel.body.appendChild(syncBody);
+      host.appendChild(syncPanel.panel);
+
       const formPanel = buildPanel('新建发布请求', { bodyClass: 'panel__body' });
       formPanel.body.innerHTML = PUBLISH_FORM_HTML; // 静态骨架
       host.appendChild(formPanel.panel);
@@ -3322,6 +3486,13 @@ function publishView() {
         deliverySelect: form.querySelector('#pub-delivery'),
         modeSelect: form.querySelector('#pub-mode'),
         endpointsBody: endpointsPanel.body,
+        syncBody: syncBody,
+        syncPublisher: syncPanel.body.querySelector('#sp-publisher'),
+        syncNode: syncPanel.body.querySelector('#sp-node'),
+        syncSource: syncPanel.body.querySelector('#sp-source'),
+        syncTarget: syncPanel.body.querySelector('#sp-target'),
+        syncMode: syncPanel.body.querySelector('#sp-mode'),
+        syncDelivery: syncPanel.body.querySelector('#sp-delivery'),
         sourceDirInput: form.querySelector('#pub-source'),
         targetInput: form.querySelector('#pub-target'),
         noteInput: form.querySelector('#pub-note'),
@@ -3334,6 +3505,10 @@ function publishView() {
       };
 
       form.addEventListener('submit', createRequest);
+      const syncForm = syncPanel.body.querySelector('#sync-form');
+      if (syncForm) syncForm.addEventListener('submit', saveSyncProfile);
+      renderSyncOptions();
+      loadSyncProfiles();
       statusSelect.addEventListener('change', function () {
         statusFilter = statusSelect.value;
         loadRequests();
