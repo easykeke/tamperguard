@@ -114,7 +114,7 @@ sudo ./bin/tg-server serve --data-dir /var/lib/tamperguard
 curl -sS --cacert /var/lib/tamperguard/keys/ca.crt https://127.0.0.1:8443/healthz
 ```
 
-期望 `{"status":"ok","version":"0.2.0",...}`。
+期望 `{"status":"ok","version":"0.2.1",...}`。
 
 ### 4.2 systemd 托管（长期运行）
 

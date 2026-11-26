@@ -24,7 +24,7 @@ make bpf            # 重新生成 eBPF Go 绑定（需要 clang/bpftool）
 make rasp-java      # 构建 Java 探针 jar
 ```
 
-`make release VERSION=0.2.0` 产出 `dist/release/` 下的 linux amd64/arm64 包与校验和。
+`make release VERSION=0.2.1` 产出 `dist/release/` 下的 linux amd64/arm64 包与校验和。
 
 ## 代码结构
 

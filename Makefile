@@ -1,6 +1,6 @@
 GO      ?= go
 BIN     ?= bin
-VERSION ?= 0.2.0
+VERSION ?= 0.2.1
 LDFLAGS := -s -w
 
 .PHONY: all build clean test vet fmt bpf e2e tools
