@@ -32,8 +32,13 @@ ok "swtpm and tpm2-tools present"
 
 say "build"
 cd "$REPO" || exit 1
-go build -o "$BIN"/ ./cmd/... || { echo "build failed"; exit 1; }
-ok "binaries built"
+if [ "${SKIP_BUILD:-0}" = "1" ]; then
+  [ -x "$BIN/tg-server" ] && [ -x "$BIN/tg-agent" ] || { echo "prebuilt binaries missing in $BIN"; exit 1; }
+  ok "using prebuilt binaries"
+else
+  go build -o "$BIN"/ ./cmd/... || { echo "build failed"; exit 1; }
+  ok "binaries built"
+fi
 
 say "software TPM and attestation key"
 rm -rf "$DATA"; mkdir -p "$DATA/tpm" "$DATA/keys"

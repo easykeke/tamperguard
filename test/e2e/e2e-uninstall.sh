@@ -53,7 +53,12 @@ wait_pid() {
 
 say "build"
 cd "$REPO" || exit 1
-go build -o "$BIN"/ ./cmd/... || { echo "build failed"; exit 1; }
+if [ "${SKIP_BUILD:-0}" = "1" ]; then
+  [ -x "$BIN/tg-server" ] || { echo "prebuilt binaries missing"; exit 1; }
+  ok "using prebuilt binaries"
+else
+  go build -o "$BIN"/ ./cmd/... || { echo "build failed"; exit 1; }
+fi
 ok "binaries built"
 
 say "control plane"
