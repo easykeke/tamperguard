@@ -1771,19 +1771,28 @@ function nodesView(options) {
     try {
       const res = await api('POST', '/bootstrap-tokens', { body: { role: role }, signal: ac.signal });
       const server = location.origin;
-      const download = server + '/api/v1/downloads/agent?role=' + role;
-      const enroll = isPublish
-        ? 'tg-agent enroll --server ' + server + ' --bootstrap ' + res.token +
-          ' --ca ca.crt --role publish --state-dir /var/lib/tamperguard-publish'
-        : 'tg-agent enroll --server ' + server + ' --bootstrap ' + res.token +
-          ' --ca ca.crt --role protect --state-dir /var/lib/tamperguard-agent --publisher-uids 0';
-      const run = isPublish
-        ? 'tg-publish run --state-dir /var/lib/tamperguard-publish'
-        : 'tg-agent run --state-dir /var/lib/tamperguard-agent';
-      const detail = '下载：' + download + '\n\n' +
-        '将 CA 证书（控制面 <数据目录>/keys/ca.crt）与二进制一起带到目标主机，然后执行：\n\n' +
-        enroll + '\n\n# 常驻运行：\n' + run + '\n\n' +
-        'Windows 被防护端：使用 deploy/windows/install-service.ps1 安装为服务，注册参数相同。';
+      const linuxDownload = server + '/api/v1/downloads/agent?role=' + role + '&os=linux&arch=amd64';
+      const windowsDownload = server + '/api/v1/downloads/agent?role=' + role + '&os=windows&arch=amd64';
+      const linuxEnroll = isPublish
+        ? 'sudo ./tg-agent enroll --server ' + server + ' --bootstrap ' + res.token +
+          ' --ca ca.crt --role publish --state-dir /var/lib/tamperguard-publish\n' +
+          'sudo tg-publish run --state-dir /var/lib/tamperguard-publish'
+        : 'sudo ./tg-agent enroll --server ' + server + ' --bootstrap ' + res.token +
+          ' --ca ca.crt --role protect --state-dir /var/lib/tamperguard-agent --publisher-uids 0\n' +
+          'sudo systemctl enable --now tamperguard-agent';
+      const windowsEnroll = isPublish
+        ? '.\\tg-agent.exe enroll --server ' + server + ' --bootstrap ' + res.token +
+          ' --ca ca.crt --role publish --state-dir C:\\ProgramData\\TamperGuard-publish\n' +
+          '.\\tg-publish.exe run --state-dir C:\\ProgramData\\TamperGuard-publish'
+        : '# 管理员 PowerShell\n.\\tg-agent.exe enroll --server ' + server + ' --bootstrap ' + res.token +
+          ' --ca ca.crt --role protect --state-dir C:\\ProgramData\\TamperGuard --publisher-sids "DOMAIN\\svc-publish"\n' +
+          '.\\install-service.ps1';
+      const detail = '令牌仅可使用一次。\n\n' +
+        'Linux 下载：' + linuxDownload + '\n' +
+        'Linux 命令：\n' + linuxEnroll + '\n\n' +
+        'Windows 下载：' + windowsDownload + '\n' +
+        'Windows 命令：\n' + windowsEnroll + '\n\n' +
+        'CA 证书从控制面 <数据目录>/keys/ca.crt 获取，与二进制放在同一目录。';
       showTicketDialog(title, res.token, detail);
     } catch (err) {
       if (isAborted(err) || err.handled) return;
@@ -1800,10 +1809,12 @@ function nodesView(options) {
       box.appendChild(el('h3', 'install-card__title', title));
       box.appendChild(el('p', 'install-card__desc', desc));
       const actions = el('div', 'row-actions');
-      const link = el('a', 'btn btn--sm', '下载安装包');
-      link.href = '/api/v1/downloads/agent?role=' + role;
-      link.setAttribute('download', '');
-      actions.appendChild(link);
+      [['linux', 'amd64', '下载 Linux 版'], ['windows', 'amd64', '下载 Windows 版']].forEach(function (item) {
+        const link = el('a', 'btn btn--sm', item[2]);
+        link.href = '/api/v1/downloads/agent?role=' + role + '&os=' + item[0] + '&arch=' + item[1];
+        link.setAttribute('download', '');
+        actions.appendChild(link);
+      });
       actions.appendChild(button('生成安装令牌', {
         variant: 'primary',
         size: 'sm',

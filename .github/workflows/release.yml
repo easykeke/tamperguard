@@ -24,5 +24,6 @@ jobs:
         with:
           files: |
             dist/release/*.tar.gz
+            dist/release/*.zip
             dist/release/SHA256SUMS
           generate_release_notes: true

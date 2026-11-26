@@ -20,6 +20,24 @@ for arch in amd64 arm64; do
   echo "built $pkg.tar.gz"
 done
 
+# Windows agent bundle (protect + publish + service installer).
+winpkg="$OUT/tamperguard_${VERSION}_windows_amd64"
+mkdir -p "$winpkg"
+for cmd in tg-agent tg-publish; do
+  GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$winpkg/$cmd.exe" "./cmd/$cmd"
+done
+cp deploy/windows/install-service.ps1 "$winpkg/" 2>/dev/null || true
+cp deploy/windows/README.md "$winpkg/" 2>/dev/null || true
+cp LICENSE "$winpkg/" 2>/dev/null || true
+if command -v zip >/dev/null; then
+  (cd "$OUT" && zip -qr "$(basename "$winpkg").zip" "$(basename "$winpkg")")
+  rm -rf "$winpkg"
+else
+  tar -C "$OUT" -czf "$winpkg.tar.gz" "$(basename "$winpkg")"
+  rm -rf "$winpkg"
+fi
+echo "built windows amd64 bundle"
+
 cd "$OUT"
-sha256sum ./*.tar.gz > SHA256SUMS
+sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
 cat SHA256SUMS
