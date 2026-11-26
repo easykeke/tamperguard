@@ -169,3 +169,33 @@ eBPF LSM 链接默认只由 Agent 进程的 fd 持有，`kill -9` 会让内核�
 ```
 
 注意：这提高的是"杀掉进程即失效"的成本，不改变"root 可主动 detach"的事实；对抗 root 的边界见 `docs/agent-lifecycle.md` 与 README 的安全边界。
+
+## P6.2 Agent 自检（自身文件完整性）
+
+Agent 首次启动时把自身可执行文件、systemd unit（Linux）与 `agent.json` 的 SHA-256 写入 `<state>/selfcheck.json`；之后启动及每 5 分钟复核。任何变化都会：
+
+- 写一条 `agent.selfcheck_failed` 到签名审计链（服务端可见、有 seq/哈希链保护）；
+- `tg-agent selfcheck` 手动检查，发现变化退出非零。
+
+这是**检测**而不是阻止：root 仍可替换二进制并让它"不再自检"。配合 Windows 安装脚本的目录 ACL（SYSTEM 完全控制、Administrators 只读）、Linux 的 root:root 0755 权限与可选的 `chattr +i`，把静默替换变成需要显式对抗的动作。真正的阻止需要把 Agent 自身路径纳入内核保护并给升级流程发临时授权，属于后续项。
+
+实测：
+
+```
+[ok] baseline written
+[ok] selfcheck OK before tampering
+[ok] selfcheck reports the changed file
+```
+
+## P6.3 启动证据上报（Secure Boot / TPM PCR / IMA / cmdline）
+
+Agent 每次心跳附带启动证据摘要：Secure Boot 状态（efivars）、TPM 是否可用与 PCR 0/4/7（存在时）、IMA 策略是否存在、内核 cmdline 哈希；这些字段合成一个 `boot_digest`，随 `caps` 上报并在节点详情展示。控制面收到不同摘要时记录告警日志，可据此发现离线修改、rescue 启动、关闭 Secure Boot 等行为。
+
+**边界**：这是证据上报，不是密码学远程证明。还没有做的是 TPM quote（AK 签名 + 控制面验证 nonce），因此不能抵抗"Agent 进程本身被替换后伪造证据"；该能力依赖 TPM 与专用密钥，列为后续。
+
+实测（WSL2，无 TPM/efivars）：
+
+```
+[ok] boot digest reported: affe3474b9db…
+[ok] secure boot state reported: unknown
+```

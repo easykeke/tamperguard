@@ -76,6 +76,10 @@ e2e-landlock:
 e2e-proxy-signed:
 	bash test/e2e/e2e-proxy-signed.sh
 
+## e2e-selfcheck: agent self-check and boot-evidence reporting
+e2e-selfcheck:
+	bash test/e2e/e2e-selfcheck.sh
+
 ## e2e-ebpf-pin: pinned LSM links survive kill -9
 e2e-ebpf-pin:
 	bash test/e2e/e2e-ebpf-pin.sh

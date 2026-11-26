@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/enforcer"
 	"github.com/easykeke/tamperguard/internal/fsverity"
 	"github.com/easykeke/tamperguard/internal/landlock"
+	"github.com/easykeke/tamperguard/internal/selfcheck"
 	"github.com/easykeke/tamperguard/internal/uninstall"
 )
 
@@ -44,6 +46,8 @@ func main() {
 		err = cmdLandlock(os.Args[2:])
 	case "verity":
 		err = cmdVerity(os.Args[2:])
+	case "selfcheck":
+		err = cmdSelfcheck(os.Args[2:])
 	case "ebpf-detach":
 		err = cmdEBPFDetach()
 	case "uninstall":
@@ -72,6 +76,7 @@ func usage() {
   tg-agent probe  [--state-dir DIR]
   tg-agent landlock [--allow-write DIRS] [--check] -- CMD [ARGS...]
   tg-agent verity  enable|digest|check PATH
+  tg-agent selfcheck [--state-dir DIR] (verify the agent's own files)
   tg-agent ebpf-detach               (remove pinned LSM links; maintenance)
   tg-agent uninstall [--state-dir DIR] [--ticket CODE] [--reason TEXT] [--dry-run]
   tg-agent unlock [--state-dir DIR]   (Windows: restore inherited permissions)
@@ -156,6 +161,31 @@ func cmdLandlock(args []string) error {
 		return fmt.Errorf("landlock: %w", err)
 	}
 	return nil
+}
+
+// cmdSelfcheck verifies the agent binary, unit and config against the stored
+// baseline and exits non-zero on a mismatch.
+func cmdSelfcheck(args []string) error {
+	fs := flag.NewFlagSet("selfcheck", flag.ExitOnError)
+	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
+	_ = fs.Parse(args)
+	baseline := filepath.Join(*stateDir, "selfcheck.json")
+	m, err := selfcheck.Load(baseline)
+	if err != nil {
+		return fmt.Errorf("selfcheck: no baseline at %s (the agent creates it on first start): %w", baseline, err)
+	}
+	diffs, err := selfcheck.Compare(m)
+	if err != nil {
+		return err
+	}
+	if len(diffs) == 0 {
+		fmt.Printf("selfcheck: OK (%d files match)\n", len(m.Files))
+		return nil
+	}
+	for _, d := range diffs {
+		fmt.Println("selfcheck: CHANGED", d.String())
+	}
+	return fmt.Errorf("selfcheck: %d file(s) changed", len(diffs))
 }
 
 // cmdEBPFDetach removes the pinned LSM links. Stopping the service does not

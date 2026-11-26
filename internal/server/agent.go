@@ -210,11 +210,29 @@ type heartbeatResponse struct {
 	HeartbeatInterval int              `json:"heartbeat_interval"`
 }
 
+// bootDigestOf extracts the boot-evidence digest from the caps JSON.
+func bootDigestOf(caps []byte) string {
+	var v struct {
+		BootDigest string `json:"boot_digest"`
+	}
+	if len(caps) == 0 || json.Unmarshal(caps, &v) != nil {
+		return ""
+	}
+	return v.BootDigest
+}
+
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	agentID, _ := clientCN(r)
 	var in heartbeatRequest
 	if !decodeJSON(w, r, &in) {
 		return
+	}
+	if prev, err := s.st.GetNode(agentID); err == nil {
+		prevDigest := bootDigestOf(prev.Caps)
+		newDigest := bootDigestOf(in.Caps)
+		if prevDigest != "" && newDigest != "" && prevDigest != newDigest {
+			s.log.Warn("boot evidence changed", "node", agentID, "previous", prevDigest, "current", newDigest)
+		}
 	}
 	if err := s.st.ApplyHeartbeat(store.HeartbeatInput{
 		NodeID:          agentID,

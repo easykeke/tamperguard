@@ -24,6 +24,12 @@ type Capability struct {
 	Available bool   `json:"available"` // can it enforce at all
 	Degraded  bool   `json:"degraded"`  // available, but weaker than the target
 	Reason    string `json:"reason,omitempty"`
+
+	// Boot-integrity evidence reported with every heartbeat (see internal/attest).
+	BootDigest string `json:"boot_digest,omitempty"`
+	SecureBoot string `json:"secure_boot,omitempty"`
+	TPM        bool   `json:"tpm,omitempty"`
+	IMA        bool   `json:"ima,omitempty"`
 }
 
 // RevocationSet is the flattened revocation list delivered by the control

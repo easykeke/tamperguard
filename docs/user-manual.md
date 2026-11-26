@@ -458,6 +458,19 @@ Start-Service TamperGuardAgent
 - 想保留管理员写权限（不推荐）：`run --windows-allow-admins`；
 - MIC 在不支持的宿主会自动禁用，capability 里会写明原因。
 
+### 9.8 Agent 自检与启动证据
+
+**自检**：Agent 首次启动会记录自身二进制、systemd unit 与 `agent.json` 的哈希基线（`<状态目录>/selfcheck.json`），并在启动时与每 5 分钟复核；发现变化会写入审计链（`agent.selfcheck_failed`）。手动检查：
+
+```bash
+sudo tg-agent selfcheck --state-dir /var/lib/tamperguard-agent
+# selfcheck: OK (3 files match)   或   selfcheck: CHANGED <path> ...
+```
+
+**启动证据**：每次心跳附带 Secure Boot 状态、TPM 是否可用、IMA 是否存在、内核 cmdline 哈希，合并为 `boot_digest`，节点详情「能力探测」中可见。控制面发现摘要变化会记录告警，可暴露离线修改或 rescue 启动。
+
+注意：这是**检测与证据**，不是密码学远程证明（未做 TPM quote）；Linux 上也不阻止 root 替换二进制，但会让替换留下审计痕迹。Windows 安装脚本已把程序与状态目录限制为 SYSTEM 完全控制、Administrators 只读。
+
 ### 9.7 eBPF 链接固化与维护
 
 Linux 主执行层会把 14 个 LSM 链接 pin 到 `/sys/fs/bpf/tamperguard/`。这样即使 Agent 被 `kill -9`，在内核里的最后一次策略仍继续阻断写入，直到 Agent 被重新拉起（启动时会先清理旧链接再挂新链接）。
@@ -545,6 +558,8 @@ sudo rm -rf /var/lib/tamperguard-agent
 | `tg-proxy` 启动失败 `signature does not verify` | 清单被改或公钥不匹配 | 重新 `--sync`；确认 agent state 与节点一致 |
 | `--require-signed` 拒绝启动 | 用了本地快照 | 先 `--sync`，或去掉 `--require-signed`（不推荐） |
 | 停服务后写入仍被拦截 | eBPF 链接已固化（预期行为） | 维护时执行 `tg-agent ebpf-detach`；卸载流程会自动 detach |
+| `selfcheck` 报 CHANGED | Agent 文件被修改（升级/手工改动） | 确认变更来源；升级后重建基线或恢复文件 |
+| 节点详情 boot_digest 变化 | 启动链/内核参数/Secure Boot 变化 | 核实是否计划内变更；异常则按安全事件处理 |
 | 卸载请求一直 pending | 管理员尚未审批 | 管理端「卸载审批」批准，或等待超时后重新发起 |
 | 挑战码无效/已过期 | 超过 10 分钟或票据被改动 | 重新发起请求或重新下发；挑战码区分大小写 |
 | 节点离线无法自动卸载 | 管控通道不可达 | 用管理端返回的挑战码在主机上执行 `--ticket` |

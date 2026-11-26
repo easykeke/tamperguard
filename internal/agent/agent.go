@@ -12,14 +12,17 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
+	"github.com/easykeke/tamperguard/internal/attest"
 	"github.com/easykeke/tamperguard/internal/audit"
 	"github.com/easykeke/tamperguard/internal/config"
 	"github.com/easykeke/tamperguard/internal/enforcer"
 	"github.com/easykeke/tamperguard/internal/policy"
 	"github.com/easykeke/tamperguard/internal/rasp"
+	"github.com/easykeke/tamperguard/internal/selfcheck"
 	"github.com/easykeke/tamperguard/internal/uninstall"
 )
 
@@ -144,6 +147,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	// immediately instead of waiting for the next heartbeat. It is an
 	// optimisation only -- the heartbeat remains the source of truth.
 	go a.streamLoop(ctx)
+	go a.selfcheckLoop(ctx)
 
 	// Signed self-upgrade channel. When a new binary is staged the loop stops
 	// so the service manager can restart into it.
@@ -272,6 +276,67 @@ func (a *Agent) handleRemoteUninstall(data []byte) {
 	os.Exit(0)
 }
 
+// selfcheckLoop keeps a baseline of the agent's own files and periodically
+// verifies it. A mismatch is appended to the signed audit chain; it is detection,
+// not prevention (a root user can still replace the binary).
+func (a *Agent) selfcheckLoop(ctx context.Context) {
+	baseline := filepath.Join(a.state.StateDir, "selfcheck.json")
+	paths := a.selfcheckPaths()
+	if _, err := os.Stat(baseline); err != nil {
+		m, err := selfcheck.Build(paths)
+		if err != nil {
+			a.log.Warn("self-check baseline not created", "err", err)
+		} else if err := selfcheck.Save(baseline, m); err != nil {
+			a.log.Warn("self-check baseline not saved", "err", err)
+		} else {
+			a.log.Info("self-check baseline created", "files", len(m.Files))
+		}
+	} else {
+		a.runSelfcheck(baseline)
+	}
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.runSelfcheck(baseline)
+		}
+	}
+}
+
+func (a *Agent) selfcheckPaths() []string {
+	paths := []string{filepath.Join(a.state.StateDir, config.AgentStateFile)}
+	if exe, err := os.Executable(); err == nil {
+		paths = append(paths, exe)
+	}
+	if runtime.GOOS == "linux" {
+		unit := "/etc/systemd/system/tamperguard-agent.service"
+		if _, err := os.Stat(unit); err == nil {
+			paths = append(paths, unit)
+		}
+	}
+	return paths
+}
+
+func (a *Agent) runSelfcheck(baseline string) {
+	m, err := selfcheck.Load(baseline)
+	if err != nil {
+		a.log.Warn("self-check baseline unreadable", "err", err)
+		return
+	}
+	diffs, err := selfcheck.Compare(m)
+	if err != nil {
+		a.log.Warn("self-check failed", "err", err)
+		return
+	}
+	for _, d := range diffs {
+		a.log.Error("agent file changed since the baseline", "diff", d.String())
+		a.record(audit.KindAgentSelfcheck, d.Path, d.String())
+	}
+}
+
 func (a *Agent) tick(ctx context.Context) {
 	a.drainEvents()
 	if err := a.sync(ctx); err != nil {
@@ -287,6 +352,12 @@ func (a *Agent) tick(ctx context.Context) {
 
 func (a *Agent) sync(ctx context.Context) error {
 	capb := a.enf.Capability()
+	if ev := attest.Collect(""); !ev.Empty() {
+		capb.BootDigest = ev.Digest
+		capb.SecureBoot = ev.SecureBoot
+		capb.TPM = ev.TPM
+		capb.IMA = ev.IMA
+	}
 	capsJSON, _ := json.Marshal(capb)
 	healthErr := a.enf.Health()
 

@@ -1768,6 +1768,21 @@ function nodesView(options) {
       kernelCap.appendChild(el('span', 'cap-item__label', 'kernel_release'));
       kernelCap.appendChild(el('span', 'mono', textOr(caps.kernel_release)));
       capsBox.appendChild(kernelCap);
+      [
+        { label: 'boot_digest', key: 'boot_digest', short: true },
+        { label: 'secure_boot', key: 'secure_boot' },
+        { label: 'tpm', key: 'tpm' },
+        { label: 'ima', key: 'ima' },
+      ].forEach(function (item) {
+        const cap = el('div', 'cap-item');
+        cap.appendChild(el('span', 'cap-item__label mono', item.label));
+        const value = caps[item.key];
+        if (value === true) cap.appendChild(badge('是', 'ok'));
+        else if (value === false) cap.appendChild(badge('否', 'muted'));
+        else if (value) cap.appendChild(el('span', 'mono', item.short ? shortId(value, 12, 8) : String(value)));
+        else cap.appendChild(badge('未知', 'muted'));
+        capsBox.appendChild(cap);
+      });
       body.appendChild(capsBox);
     }
 

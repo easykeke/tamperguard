@@ -46,6 +46,7 @@ const (
 	KindRASPBlocked  = "rasp.blocked"
 	KindRASPObserved = "rasp.observed"
 
+	KindAgentSelfcheck     = "agent.selfcheck_failed"
 	KindUninstallRequested = "uninstall.requested"
 	KindUninstallApproved  = "uninstall.approved"
 	KindUninstallDenied    = "uninstall.denied"

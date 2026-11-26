@@ -5,6 +5,9 @@
 - **Agent 生命周期与防卸载**：新增两条且仅两条卸载路径——管理端「下发卸载」直接签发挑战码，或客户端 `tg-agent uninstall` 发起请求、管理员批准后返回挑战码；挑战码为控制面 Ed25519 签名的短时票据（绑定节点/请求/nonce/10 分钟有效期），客户端验签通过才执行清理，拒绝/超时/篡改均不删除。管理端新增「卸载审批」面板与节点「下发卸载」操作。文档 `docs/agent-lifecycle.md`，测试 `go test ./internal/uninstall`、`make e2e-uninstall`。
 - **eBPF 链接固化（P6.1）**：LSM 链接与配置 map pin 到 bpffs，`kill -9` 后防护不再出现空窗（root 写入仍 EPERM），启动时清理旧 pin、卸载与 `tg-agent ebpf-detach` 显式解除；新增 `make e2e-ebpf-pin`。
 
+- **Agent 自检（P6.2）**：自身二进制/unit/配置哈希基线，启动与每 5 分钟复核，变化写入审计链 `agent.selfcheck_failed`；`tg-agent selfcheck` 手动检查。
+- **启动证据（P6.3）**：心跳上报 Secure Boot、TPM/PCR、IMA、cmdline 摘要为 `boot_digest`，节点详情展示，控制面记录摘要变化告警。是证据上报，不是 TPM quote 远程证明。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。
