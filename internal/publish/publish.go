@@ -280,7 +280,7 @@ func (p *Publisher) TriggerSync(ctx context.Context, opts SyncOptions, timeout t
 	var req *store.PublishRequest
 	var err error
 	if opts.ProfileID != "" {
-		req, err = p.client.PublishSyncProfile(ctx, opts.ProfileID, opts.SourceDir, opts.Note)
+		req, err = p.client.PublishSyncProfile(ctx, opts.ProfileID, opts.SourceDir, opts.NodeID, opts.TargetDir, opts.Mode, opts.Delivery, opts.Note)
 	} else {
 		req, err = p.client.PublishSync(ctx, opts.NodeID, opts.SourceDir, opts.TargetDir, opts.Note, opts.Mode, opts.Delivery)
 	}

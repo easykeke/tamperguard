@@ -114,6 +114,7 @@ type PublishRequest struct {
 	// Mode is "full" (write every file in the source tree) or "incremental"
 	// (only files whose hash differs from the target/last release).
 	Mode         string `json:"mode"`
+	ProfileID    string `json:"profile_id"`
 	SkippedFiles int    `json:"skipped_files"`
 	Manifest     string `json:"manifest"`
 	TokenID      string `json:"token_id"`
@@ -269,7 +270,9 @@ func (s *Store) migrate() error {
 			enabled INTEGER NOT NULL DEFAULT 1,
 			created_by TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
+			updated_at INTEGER NOT NULL,
+			last_run_at INTEGER NOT NULL DEFAULT 0,
+			last_status TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS policies (
 			id TEXT PRIMARY KEY,
@@ -393,6 +396,9 @@ func (s *Store) migrate() error {
 		`ALTER TABLE nodes ADD COLUMN active_grants TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE publish_requests ADD COLUMN delivery TEXT NOT NULL DEFAULT 'local'`,
 		`ALTER TABLE publish_requests ADD COLUMN mode TEXT NOT NULL DEFAULT 'full'`,
+		`ALTER TABLE publish_requests ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sync_profiles ADD COLUMN last_run_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE sync_profiles ADD COLUMN last_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE publish_requests ADD COLUMN skipped_files INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN ak_pub TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE nodes ADD COLUMN attestation TEXT NOT NULL DEFAULT ''`,
@@ -715,19 +721,19 @@ func (s *Store) CreatePublishRequest(r PublishRequest) (PublishRequest, error) {
 	r.CreatedAt = now()
 	r.UpdatedAt = r.CreatedAt
 	_, err := s.db.Exec(`INSERT INTO publish_requests
-		(id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, skipped_files, created_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, profile_id, skipped_files, created_by, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.NodeID, r.PublisherID, r.SourceDir, r.TargetDir, r.Note, r.Status, r.Delivery,
-		r.Mode, r.SkippedFiles, r.CreatedBy, r.CreatedAt, r.UpdatedAt)
+		r.Mode, r.ProfileID, r.SkippedFiles, r.CreatedBy, r.CreatedAt, r.UpdatedAt)
 	return r, err
 }
 
-const publishCols = `id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, skipped_files, manifest, token_id, error, created_by, created_at, updated_at`
+const publishCols = `id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, profile_id, skipped_files, manifest, token_id, error, created_by, created_at, updated_at`
 
 func scanPublish(sc interface{ Scan(...any) error }) (PublishRequest, error) {
 	var r PublishRequest
 	err := sc.Scan(&r.ID, &r.NodeID, &r.PublisherID, &r.SourceDir, &r.TargetDir, &r.Note, &r.Status,
-		&r.Delivery, &r.Mode, &r.SkippedFiles, &r.Manifest, &r.TokenID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
+		&r.Delivery, &r.Mode, &r.ProfileID, &r.SkippedFiles, &r.Manifest, &r.TokenID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -1033,6 +1039,8 @@ type SyncProfile struct {
 	CreatedBy   string `json:"created_by"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
+	LastRunAt   int64  `json:"last_run_at"`
+	LastStatus  string `json:"last_status"`
 }
 
 // CreateSyncProfile inserts one profile.
@@ -1051,13 +1059,14 @@ func (s *Store) CreateSyncProfile(p SyncProfile) (SyncProfile, error) {
 	return p, err
 }
 
-const syncProfileCols = `id, publisher_id, node_id, source_dir, target_dir, mode, delivery, enabled, created_by, created_at, updated_at`
+const syncProfileCols = `id, publisher_id, node_id, source_dir, target_dir, mode, delivery, enabled, created_by, created_at, updated_at, last_run_at, last_status`
 
 func scanSyncProfile(sc interface{ Scan(...any) error }) (SyncProfile, error) {
 	var p SyncProfile
 	var enabled int
 	err := sc.Scan(&p.ID, &p.PublisherID, &p.NodeID, &p.SourceDir, &p.TargetDir,
-		&p.Mode, &p.Delivery, &enabled, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt)
+		&p.Mode, &p.Delivery, &enabled, &p.CreatedBy, &p.CreatedAt, &p.UpdatedAt,
+		&p.LastRunAt, &p.LastStatus)
 	p.Enabled = enabled != 0
 	return p, err
 }
@@ -1107,6 +1116,12 @@ func (s *Store) GetSyncProfile(id string) (SyncProfile, error) {
 		return SyncProfile{}, ErrNotFound
 	}
 	return p, err
+}
+
+// UpdateSyncProfileRun records the latest execution for the console list.
+func (s *Store) UpdateSyncProfileRun(id, status string) error {
+	_, err := s.db.Exec(`UPDATE sync_profiles SET last_run_at=?, last_status=? WHERE id=?`, now(), status, id)
+	return err
 }
 
 // DeleteSyncProfile removes a profile.

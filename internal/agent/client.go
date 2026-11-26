@@ -476,6 +476,8 @@ type SyncProfile struct {
 	Mode        string `json:"mode"`
 	Delivery    string `json:"delivery"`
 	Enabled     bool   `json:"enabled"`
+	LastRunAt   int64  `json:"last_run_at"`
+	LastStatus  string `json:"last_status"`
 }
 
 // SyncProfiles lists the enabled profiles assigned to this publisher.
@@ -489,10 +491,15 @@ func (c *Client) SyncProfiles(ctx context.Context) ([]SyncProfile, error) {
 
 // PublishSyncProfile triggers a console-configured profile. Paths and mode come
 // from the control plane; only the source directory may be overridden locally.
-func (c *Client) PublishSyncProfile(ctx context.Context, profileID, sourceOverride, note string) (*store.PublishRequest, error) {
+func (c *Client) PublishSyncProfile(ctx context.Context, profileID, source, node, target, mode, delivery, note string) (*store.PublishRequest, error) {
 	body := map[string]string{"profile_id": profileID, "note": note}
-	if sourceOverride != "" {
-		body["source_dir"] = sourceOverride
+	for k, v := range map[string]string{
+		"source_dir": source, "node_id": node, "target_dir": target,
+		"mode": mode, "delivery": delivery,
+	} {
+		if v != "" {
+			body[k] = v
+		}
 	}
 	var out store.PublishRequest
 	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/publish/sync", body, &out); err != nil {

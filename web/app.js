@@ -3052,6 +3052,7 @@ function publishView() {
       { label: '目标目录' },
       { label: '模式' },
       { label: '方式' },
+      { label: '最近执行' },
       { label: '操作' },
     ], 'data-table--compact');
     syncProfiles.forEach(function (sp) {
@@ -3062,6 +3063,16 @@ function publishView() {
       tr.appendChild(cell(textOr(sp.target_dir), 'mono cell-ellipsis', textOr(sp.target_dir)));
       tr.appendChild(cell(sp.mode === 'incremental' ? '增量' : '全量'));
       tr.appendChild(cell(sp.delivery === 'local' ? '本机写入' : '跨机拉取'));
+      const lastTd = el('td');
+      if (sp.last_run_at) {
+        lastTd.appendChild(el('span', 'cell-nowrap', fmtTime(sp.last_run_at)));
+        const tone = sp.last_status === 'done' ? 'ok' : sp.last_status === 'failed' ? 'danger' : 'muted';
+        lastTd.appendChild(el('span', 'cell-sub'));
+        lastTd.appendChild(badge(sp.last_status || '—', tone));
+      } else {
+        lastTd.appendChild(el('span', 'muted', '未执行'));
+      }
+      tr.appendChild(lastTd);
       const td = el('td');
       td.appendChild(button('删除', {
         variant: 'ghost',

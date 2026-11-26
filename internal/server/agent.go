@@ -701,6 +701,9 @@ func (s *Server) handlePublishComplete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	if reqRow.ProfileID != "" {
+		_ = s.st.UpdateSyncProfileRun(reqRow.ProfileID, status)
+	}
 	s.log.Info("publish finished", "request", id, "status", status, "publisher", cn)
 	writeJSON(w, http.StatusOK, map[string]string{"status": status})
 }

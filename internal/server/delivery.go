@@ -237,6 +237,9 @@ func (s *Server) handleDeliveryComplete(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	if req.ProfileID != "" {
+		_ = s.st.UpdateSyncProfileRun(req.ProfileID, status)
+	}
 	s.log.Info("pull delivery finished", "request", id, "status", status, "node", nodeID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": status})
 }

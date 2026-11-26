@@ -31,12 +31,20 @@ func (s *Server) handlePublisherSync(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "not_found", "sync profile not found for this publisher")
 			return
 		}
-		in.NodeID = profile.NodeID
-		in.TargetDir = profile.TargetDir
-		in.Mode = profile.Mode
-		in.Delivery = profile.Delivery
+		if in.NodeID == "" {
+			in.NodeID = profile.NodeID
+		}
+		if in.TargetDir == "" {
+			in.TargetDir = profile.TargetDir
+		}
+		if in.Delivery == "" {
+			in.Delivery = profile.Delivery
+		}
 		if in.SourceDir == "" {
 			in.SourceDir = profile.SourceDir
+		}
+		if in.Mode == "" {
+			in.Mode = profile.Mode
 		}
 	}
 	if in.SourceDir == "" || in.TargetDir == "" {
@@ -69,12 +77,16 @@ func (s *Server) handlePublisherSync(w http.ResponseWriter, r *http.Request) {
 		TargetDir:   in.TargetDir,
 		Note:        in.Note,
 		Mode:        in.Mode,
+		ProfileID:   in.ProfileID,
 		Delivery:    in.Delivery,
 		CreatedBy:   "publisher:" + publisherID,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
+	}
+	if req.ProfileID != "" {
+		_ = s.st.UpdateSyncProfileRun(req.ProfileID, "requested")
 	}
 	s.log.Info("publisher-triggered sync created", "request", req.ID, "node", req.NodeID,
 		"publisher", publisherID, "mode", req.Mode)
