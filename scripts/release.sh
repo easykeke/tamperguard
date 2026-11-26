@@ -11,7 +11,7 @@ mkdir -p "$OUT"
 for arch in amd64 arm64; do
   pkg="$OUT/tamperguard_${VERSION}_linux_${arch}"
   mkdir -p "$pkg"
-  for cmd in tg-server tg-agent tg-publish; do
+  for cmd in tg-server tg-agent tg-publish tg-proxy; do
     GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" -o "$pkg/$cmd" "./cmd/$cmd"
   done
   cp LICENSE "$pkg/" 2>/dev/null || true

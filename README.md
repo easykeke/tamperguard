@@ -126,6 +126,7 @@ Makefile            make build，产出 bin/ 下三个二进制
 - [不可变发布模式](docs/immutable.md)：只读镜像 + 滚动发布，以及它与文件级防护的配合方式（`deploy/k8s/immutable/`）。
 - [Windows 部署](deploy/windows/README.md)：无驱动的服务安装、加固与局限。
 - [Windows 更强方案评估](docs/windows-stronger-options.md)：CFA、事件驱动自愈、Web 层内容校验、VSS、不可变镜像的对比与选择。
+- [Web 层内容校验](docs/web-verification.md)：tg-proxy 快照 + 逐请求校验，磁盘被改也交付可信内容。
 - [变更记录](CHANGELOG.md)：能力清单、验证矩阵、已知限制。
 - [安全策略](SECURITY.md)：漏洞报告渠道与威胁模型边界。
 - [贡献指南](CONTRIBUTING.md)：构建、测试矩阵、代码结构、提交要求。

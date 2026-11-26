@@ -20,6 +20,7 @@ make e2e-rasp-java  # Java 探针
 make e2e-pull       # 跨机发布
 make e2e-landlock   # Landlock 进程自保护（需要内核启用 Landlock）
 make e2e-verity     # fs-verity 发布固化（内核不支持时跳过）
+make e2e-proxy      # Web 层内容校验代理
 make bpf            # 重新生成 eBPF Go 绑定（需要 clang/bpftool）
 make rasp-java      # 构建 Java 探针 jar
 ```
