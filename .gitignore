@@ -18,3 +18,6 @@ bpf/vmlinux.h
 
 .test-win/*.out
 .test-win/*.err
+
+.test-win/*.log
+.test-win/*.json
