@@ -4,6 +4,7 @@ package enforcer
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"unsafe"
 
@@ -11,9 +12,9 @@ import (
 )
 
 // DebugIntegrity is a diagnostics helper for the on-host test harness. It
-// reports whether SeSecurityPrivilege can be enabled, what each step of the
-// label write returns and what the read-back sees. It never panics and its
-// return value is meant for a log line.
+// compares the label of known system objects with the target, tries to write
+// the requested label, and prints the raw SDDL and icacls view afterwards. The
+// returned string is meant for a single log line.
 func DebugIntegrity(path, levelNameCfg string) string {
 	level, ok := parseLevel(levelNameCfg)
 	if !ok || level == levelUnknown {
@@ -22,34 +23,72 @@ func DebugIntegrity(path, levelNameCfg string) string {
 	var b strings.Builder
 
 	privErr := enablePrivilege("SeSecurityPrivilege")
-	fmt.Fprintf(&b, "enablePrivilege=%v ", privErr)
-	state, err := securityPrivilegeState()
-	if err != nil {
-		fmt.Fprintf(&b, "privQueryErr=%v ", err)
-	} else {
-		fmt.Fprintf(&b, "privState=%s ", state)
-	}
+	state, qerr := securityPrivilegeState()
+	fmt.Fprintf(&b, "privilege=%v/%s(qerr=%v)", privErr, state, qerr)
+
+	// Known-label controls: if these read as unknown while icacls shows a label,
+	// the read path is broken rather than the write path.
+	describeLabel(&b, "kernel32", `C:\Windows\System32\kernel32.dll`)
+	describeLabel(&b, "windows", `C:\Windows`)
+	describeLabel(&b, "programdata", `C:\ProgramData`)
+	describeLabel(&b, "target-before", path)
 
 	setErr := setIntegrity(path, level, false)
-	fmt.Fprintf(&b, "setIntegrity=%v ", setErr)
+	fmt.Fprintf(&b, " | set=%v", setErr)
 
-	if got, rerr := integrityOf(path); rerr != nil {
-		fmt.Fprintf(&b, "readbackErr=%v ", rerr)
+	if out, err := exec.Command("icacls.exe", path).CombinedOutput(); err != nil {
+		fmt.Fprintf(&b, " | icacls-error=%v", err)
 	} else {
-		fmt.Fprintf(&b, "readback=%s ", levelName(got))
+		fmt.Fprintf(&b, " | icacls=[%s]", firstNonEmptyLine(string(out)))
 	}
 
-	sd, gerr := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.SACL_SECURITY_INFORMATION)
-	if gerr != nil {
-		fmt.Fprintf(&b, "getSaclErr=%v", gerr)
-	} else if sacl, _, serr := sd.SACL(); serr != nil {
-		fmt.Fprintf(&b, "saclErr=%v", serr)
-	} else if sacl == nil {
-		b.WriteString("sacl=nil")
-	} else {
-		fmt.Fprintf(&b, "saclAces=%d", sacl.AceCount)
+	describeLabel(&b, "target-after", path)
+	if sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.SACL_SECURITY_INFORMATION); err != nil {
+		fmt.Fprintf(&b, " | sddlErr=%v", err)
+	} else if s := sd.String(); len(s) > 0 {
+		fmt.Fprintf(&b, " | sddl=%s", truncate(s, 240))
 	}
 	return b.String()
+}
+
+// describeLabel renders "tag=low(aces=1)" for one path.
+func describeLabel(b *strings.Builder, tag, path string) {
+	level, err := integrityOf(path)
+	aces, saclErr := saclAceCount(path)
+	fmt.Fprintf(b, " | %s=%s(aces=%d,readErr=%v,saclErr=%v)", tag, levelName(level), aces, err, saclErr)
+}
+
+func saclAceCount(path string) (int, error) {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.SACL_SECURITY_INFORMATION)
+	if err != nil {
+		return -1, err
+	}
+	sacl, _, err := sd.SACL()
+	if err != nil {
+		return -1, err
+	}
+	if sacl == nil {
+		return 0, nil
+	}
+	return int(sacl.AceCount), nil
+}
+
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(s, "\r", ""), "\n") {
+		if strings.TrimSpace(line) != "" {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
+}
+
+func truncate(s string, n int) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // securityPrivilegeState reports whether SeSecurityPrivilege is present and
