@@ -33,6 +33,15 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 2
 }
 
+# Copy binaries from the extracted bundle next to this script.
+New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
+foreach ($bin in @('tg-agent.exe', 'tg-publish.exe', 'tg-agent-gui.exe')) {
+    $src = Join-Path $PSScriptRoot $bin
+    if (Test-Path $src) {
+        Copy-Item $src (Join-Path $AgentDir $bin) -Force
+    }
+}
+
 $agentExe = Join-Path $AgentDir 'tg-agent.exe'
 if (-not (Test-Path $agentExe)) {
     Write-Host "ERROR: $agentExe not found. Copy tg-agent.exe into $AgentDir first." -ForegroundColor Red
@@ -85,21 +94,22 @@ foreach ($svc in $services) {
 }
 Start-Service $Watchdog
 
-# 5. Tray UI (user session): copy the script and start it at logon for all users.
-$traySrc = Join-Path $PSScriptRoot 'tg-agent-tray.ps1'
-$trayDst = Join-Path $AgentDir 'tg-agent-tray.ps1'
-if (Test-Path $traySrc) {
-    Copy-Item $traySrc $trayDst -Force
-    $startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\TamperGuardTray.lnk'
+# 5. Native GUI client (C/S): talks to the service over the local named pipe.
+$guiSrc = Join-Path $PSScriptRoot 'tg-agent-gui.exe'
+$guiDst = Join-Path $AgentDir 'tg-agent-gui.exe'
+if (Test-Path $guiSrc) {
+    Copy-Item $guiSrc $guiDst -Force
+}
+if (Test-Path $guiDst) {
+    $startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\TamperGuardGui.lnk'
     $ws = New-Object -ComObject WScript.Shell
     $shortcut = $ws.CreateShortcut($startup)
-    $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$trayDst`""
+    $shortcut.TargetPath = $guiDst
     $shortcut.WorkingDirectory = $AgentDir
-    $shortcut.Description = 'TamperGuard tray UI'
+    $shortcut.Description = 'TamperGuard GUI client'
     $shortcut.Save()
-    Start-Process -WindowStyle Hidden -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$trayDst`""
-    Write-Host "tray UI installed and started (status: $StatusDir)" -ForegroundColor Green
+    Start-Process -FilePath $guiDst
+    Write-Host "GUI client installed and started (tray + window)" -ForegroundColor Green
 }
 
 Write-Host "installed services: $($services -join ', ') + $Watchdog" -ForegroundColor Green

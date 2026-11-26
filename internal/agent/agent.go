@@ -145,6 +145,7 @@ func parsePublicKeyHex(s string) (ed25519.PublicKey, error) {
 
 // Run drives the agent until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
+	a.startIPC()
 	interval := time.Duration(a.state.PollSeconds) * time.Second
 	if interval <= 0 {
 		interval = 15 * time.Second

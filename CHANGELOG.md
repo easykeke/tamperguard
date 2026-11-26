@@ -40,6 +40,8 @@
 
 - **Windows 托盘界面**：新增 `tg-agent-tray.ps1`，安装脚本自动创建开机启动快捷方式；托盘读取服务写入的 `TamperGuardStatus\status.json`（在线/执行层/降级/策略摘要/管理端地址），提供打开管理端、查看状态、退出托盘。托盘仅显示，不参与防护，退出不影响服务。
 
+- **Windows 原生 GUI 客户端（C/S）+ 单一安装包**：新增 `tg-agent-gui.exe`（Win32 窗口 + 托盘），通过命名管道 `\\.\pipe\TamperGuardAgent` 读取 LocalSystem 服务状态并显示，关闭窗口最小化到托盘、退出客户端不影响服务；Windows 下载改为一个 `tamperguard-windows-amd64.zip`（防护端 + 发布端 + GUI + 安装/自检脚本）。原 PowerShell 托盘脚本不再作为界面使用。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。

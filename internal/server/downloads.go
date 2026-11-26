@@ -9,7 +9,7 @@ import (
 // handleAgentDownload serves packaged agent binaries for Linux and Windows so
 // the console can offer installers and instructions without shell access.
 func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
-	if file := r.URL.Query().Get("file"); file == "install-service.ps1" || file == "tg-agent-tray.ps1" || file == "verify-hardening.ps1" {
+	if file := r.URL.Query().Get("file"); file == "install-service.ps1" || file == "tg-agent-tray.ps1" || file == "verify-hardening.ps1" || file == "tamperguard-windows-amd64.zip" {
 		path := filepath.Join(s.cfg.DataDir, "downloads", file)
 		f, err := os.Open(path)
 		if err != nil {

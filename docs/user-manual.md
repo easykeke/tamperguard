@@ -223,10 +223,10 @@ sudo -u tgpublish tg-publish run --state-dir /var/lib/tamperguard-publish
 
 「节点」页顶部新增「Agent 下载与安装」面板：
 
-- **被防护端**：下载 `tg-agent`，点「生成安装令牌」，按弹窗命令注册并启动；
-- **发布端**：下载 `tg-publish`（含 `tg-agent` 注册时使用），同样生成令牌后按提示执行；
-- 下载地址走登录会话（`/api/v1/downloads/agent?role=protect|publish`），二进制由控制面 `<数据目录>/downloads/` 提供；
-- 弹窗同时给出 CA 证书位置、enroll 命令、常驻运行命令；Windows 被防护端使用 `deploy/windows/install-service.ps1`。
+- **被防护端**：Linux 版单独下载；Windows 只发一个 `tamperguard-windows-amd64.zip`（防护端 + 发布端 + 原生 GUI 客户端 + 安装/自检脚本）；
+- **发布端**：Linux 版单独下载；Windows 发布端已包含在同一个 Windows 安装包中；
+- 下载接口公开只读（`/api/v1/downloads/agent?role=...&os=...&arch=...` 或 `?file=tamperguard-windows-amd64.zip`），二进制由控制面 `<数据目录>/downloads/` 提供；
+- 点「生成安装令牌」后，弹窗给出 Linux 与 Windows 两套注册命令；Windows 解压后以管理员运行 `install-service.ps1`。
 
 ### 4.3 确认上线
 
@@ -494,6 +494,12 @@ sudo tg-agent verity enable|digest|check /var/www/site/index.html
 - 看护服务本身也是同样的 ACL；
 - 管理员 `taskkill` 杀掉进程后，看护会在数秒内重新拉起；
 - 卸载 `tg-agent uninstall` 验签后由 **SYSTEM 计划任务**执行停止/删除（管理员没有直接 stop/delete 权限）。
+
+**GUI 客户端（C/S）**：Windows 安装包内含 `tg-agent-gui.exe`（Win32 窗口 + 托盘），安装脚本会创建开机启动快捷方式。客户端运行在登录用户会话，通过本机命名管道 `\\.\pipe\TamperGuardAgent` 读取 LocalSystem 服务状态，不参与防护、不需要管理员权限：
+
+- 主窗口显示在线状态、Agent ID、执行层、运行模式、策略摘要、管理端地址、最后心跳；
+- 关闭窗口最小化到托盘；托盘右键可显示窗口、打开管理端、刷新、退出；
+- 退出客户端不影响服务；服务由看护服务保持运行。
 
 安装后自检：
 
