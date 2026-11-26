@@ -1,31 +1,34 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Proves the "administrator write is denied by the System integrity label" case.
+  Proves that a System integrity label denies writes from an elevated
+  administrator session.
 
 .DESCRIPTION
-  A process cannot label an object above its own integrity level, so an elevated
-  administrator (High) cannot apply a System label - that needs a SYSTEM agent.
-  This script therefore:
-    1. creates a demo folder and a file;
-    2. runs a one-shot SYSTEM scheduled task that applies the strict DACL and the
-       System label (exactly what the agent service does);
-    3. from this (elevated administrator) session tries to overwrite and create
-       files - both must be denied;
-    4. runs another SYSTEM task to reset the label and permissions, then removes
-       the demo folder.
+  A process cannot label an object above its own integrity level, so the System
+  label must be applied by a SYSTEM task (this is exactly what the agent service
+  does). The demo folder is staged under C:\ProgramData\TamperGuard-test so it
+  does not inherit a Low label from the development workspace.
 
-  Run from an elevated PowerShell:
-    cd E:\AI-learn\Tamper-proof\.test-win
-    Set-ExecutionPolicy -Scope Process Bypass -Force
-    .\run-mic-demo.ps1
+  Steps:
+    1. create a demo folder with a file ('original');
+    2. a one-shot SYSTEM task applies the strict DACL and the System label;
+    3. from this elevated administrator session, overwrite and create must both
+       be denied and the content must stay 'original';
+    4. a one-shot SYSTEM task resets the label and permissions, then the folder
+       is removed.
+
+.EXAMPLE
+  cd E:\AI-learn\Tamper-proof\.test-win
+  Set-ExecutionPolicy -Scope Process Bypass -Force
+  .\run-mic-demo.ps1
 #>
 $ErrorActionPreference = 'Stop'
 
-$dir  = $PSScriptRoot
-$demo = Join-Path $dir 'mic-demo'
-$site = Join-Path $demo 'site'
-$log  = Join-Path $dir 'mic-demo.log'
+$staging = 'C:\ProgramData\TamperGuard-test'
+$demo    = Join-Path $staging 'mic-demo'
+$site    = Join-Path $demo 'site'
+$log     = Join-Path $PSScriptRoot 'mic-demo.log'
 
 function Log([string]$msg) {
     $line = "{0} {1}" -f (Get-Date -Format s), $msg
@@ -40,10 +43,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 2
 }
 
+New-Item -ItemType Directory -Force $staging | Out-Null
+& icacls.exe $staging /grant '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' *> $null
 "=== run-mic-demo $(Get-Date -Format s) user=$($identity.Name) ===" | Set-Content -Encoding UTF8 $log
-Log "elevated=True"
 
-# Clean any previous demo folder (it may still carry the strict DACL).
+# Clean a previous demo (it may still carry the strict DACL / System label).
 & takeown.exe /F $demo /R /D Y *> $null
 & icacls.exe $demo /reset /T /C *> $null
 Remove-Item -Recurse -Force $demo -ErrorAction SilentlyContinue
@@ -53,14 +57,14 @@ $index = Join-Path $site 'index.html'
 Set-Content -Path $index -Value 'original' -NoNewline
 
 function Invoke-SystemScript([string]$name, [string]$body) {
-    $scriptPath = Join-Path $dir ("{0}.ps1" -f $name)
+    $scriptPath = Join-Path $staging ("{0}.ps1" -f $name)
     Set-Content -Path $scriptPath -Value $body -Encoding UTF8
     $task = "TGMicDemo_{0}" -f $name
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
         -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`"" -f $scriptPath)
-    $principalTask = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' `
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' `
         -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskName $task -Action $action -Principal $principalTask -Force | Out-Null
+    Register-ScheduledTask -TaskName $task -Action $action -Principal $taskPrincipal -Force | Out-Null
     Start-ScheduledTask -TaskName $task
     Start-Sleep -Seconds 3
     $info = Get-ScheduledTaskInfo -TaskName $task
@@ -69,7 +73,6 @@ function Invoke-SystemScript([string]$name, [string]$body) {
     Remove-Item $scriptPath -ErrorAction SilentlyContinue
 }
 
-# 1. SYSTEM applies the strict DACL and the System label.
 $setup = @'
 $ErrorActionPreference = 'Stop'
 icacls "{0}" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(Rc,WDAC,WO)" "Everyone:(RX)" /T /C | Out-Null
@@ -82,7 +85,6 @@ foreach ($line in (& icacls.exe $site | Out-String) -split "`n") {
     if ($line.Trim().Length -gt 0) { Log ("    " + $line.TrimEnd()) }
 }
 
-# 2. Elevated administrator tries to write.
 $blockedOverwrite = $false
 try {
     Set-Content -Path $index -Value 'evil' -NoNewline -ErrorAction Stop
@@ -103,7 +105,6 @@ $content = Get-Content $index -Raw
 Log ("content after attempts: '" + $content + "'")
 if ($content -ne 'original') { Log "[FAIL] content changed" }
 
-# 3. SYSTEM resets label and permissions; then this session cleans up.
 $cleanup = @'
 $ErrorActionPreference = 'Stop'
 icacls "{0}" /setintegritylevel (OI)(CI)Medium | Out-Null
