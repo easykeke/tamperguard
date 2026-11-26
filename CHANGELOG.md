@@ -34,6 +34,8 @@
 - **审计明细增强**：目标端逐文件记录 `publish.file`（request/sha256/size/delivery），发布完成记录摘要；fanotify 在回滚前读取被篡改内容并记录 `tampered_sha256/size`，主体含 pid/uid/exe；审计页新增「详情」列。
 - **管理端 Agent 下载与安装**：节点页新增「Agent 下载与安装」面板，可下载被防护端/发布端二进制、生成一次性安装令牌，并在弹窗中给出 CA、注册与常驻运行命令（`/api/v1/downloads/agent`）。
 
+- **修复 Windows 安装包无法运行**：下载接口此前要求登录会话，会话失效时返回 52 字节 401 JSON 却被保存为 `tg-agent.exe`；现改为公开只读下载，并明确按 os/arch 返回 PE/ELF。Windows 无参数双击时显示用法并等待回车；新增 `install-service.ps1` 下载入口。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。

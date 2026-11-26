@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,10 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		usage()
+		if runtime.GOOS == "windows" {
+			fmt.Println("\n按回车退出…")
+			_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		}
 		os.Exit(2)
 	}
 	var err error

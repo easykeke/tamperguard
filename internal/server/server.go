@@ -204,7 +204,7 @@ func (s *Server) routes() {
 
 	m.Handle("GET /api/v1/overview", s.admin(s.handleOverview))
 
-	m.Handle("GET /api/v1/downloads/agent", s.admin(s.handleAgentDownload))
+	m.HandleFunc("GET /api/v1/downloads/agent", s.handleAgentDownload)
 	m.Handle("GET /api/v1/nodes", s.admin(s.handleListNodes))
 	m.Handle("GET /api/v1/nodes/{id}", s.admin(s.handleGetNode))
 	m.Handle("POST /api/v1/nodes/{id}/degraded-approval", s.admin(s.handleDegradedApproval))

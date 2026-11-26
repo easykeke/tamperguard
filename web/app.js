@@ -1809,7 +1809,18 @@ function nodesView(options) {
       box.appendChild(el('h3', 'install-card__title', title));
       box.appendChild(el('p', 'install-card__desc', desc));
       const actions = el('div', 'row-actions');
-      [['linux', 'amd64', '下载 Linux 版'], ['windows', 'amd64', '下载 Windows 版']].forEach(function (item) {
+      const downloads = [['linux', 'amd64', '下载 Linux 版'], ['windows', 'amd64', '下载 Windows 版']];
+      if (role === 'protect') {
+        downloads.push(['script', '', 'Windows 安装脚本']);
+      }
+      downloads.forEach(function (item) {
+        if (item[0] === 'script') {
+          const script = el('a', 'btn btn--sm', item[2]);
+          script.href = '/api/v1/downloads/agent?file=install-service.ps1';
+          script.setAttribute('download', '');
+          actions.appendChild(script);
+          return;
+        }
         const link = el('a', 'btn btn--sm', item[2]);
         link.href = '/api/v1/downloads/agent?role=' + role + '&os=' + item[0] + '&arch=' + item[1];
         link.setAttribute('download', '');

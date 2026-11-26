@@ -9,6 +9,24 @@ import (
 // handleAgentDownload serves packaged agent binaries for Linux and Windows so
 // the console can offer installers and instructions without shell access.
 func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
+	if file := r.URL.Query().Get("file"); file == "install-service.ps1" {
+		path := filepath.Join(s.cfg.DataDir, "downloads", "install-service.ps1")
+		f, err := os.Open(path)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "not_found", "install-service.ps1 not uploaded")
+			return
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="install-service.ps1"`)
+		http.ServeContent(w, r, "install-service.ps1", info.ModTime(), f)
+		return
+	}
 	role := r.URL.Query().Get("role")
 	osName := r.URL.Query().Get("os")
 	arch := r.URL.Query().Get("arch")
