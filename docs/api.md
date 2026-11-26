@@ -108,6 +108,7 @@ agents reject a snapshot whose signature or digest is wrong.
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | GET | `/publish-requests?status=` | — | List |
+| POST | `/bootstrap-tokens` | `{"role":"protect\|publish"}` | 生成一次性注册令牌（仅保存摘要，明文只返回一次），用于管理端给节点/发布端下发注册命令 |
 | POST | `/publish-requests` | `{"node_id","publisher_id","source_dir","target_dir","delivery":"local\|pull","note"}` | `delivery` defaults to `local`; `pull` means the target node fetches the artefacts |
 | GET | `/publish-requests/{id}` | — | Request detail |
 | POST | `/publish-requests/{id}/cancel` | — | Only while `pending`/`manifest_received` |

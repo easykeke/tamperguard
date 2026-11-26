@@ -220,9 +220,8 @@ const PUBLISH_FORM_HTML = `
       <p class="field-error hidden" data-error-for="node_id"></p>
     </div>
     <div class="field">
-      <label class="label" for="pub-publisher">发布端 ID <span class="req">*</span></label>
-      <input id="pub-publisher" class="input" type="text" spellcheck="false"
-             autocomplete="off" placeholder="如 pub_1">
+      <label class="label" for="pub-publisher">发布端 <span class="req">*</span></label>
+      <select id="pub-publisher" class="select"></select>
       <p class="field-error hidden" data-error-for="publisher_id"></p>
     </div>
     <div class="field">
@@ -2880,20 +2879,90 @@ function publishView() {
     return textOr(nodeId);
   }
 
+  function publishNodes() {
+    return (Array.isArray(nodes) ? nodes : []).filter(function (n) {
+      return n && n.role === 'publish';
+    });
+  }
+
+  function renderPublisherOptions() {
+    if (!refs) return;
+    const previous = refs.publisherSelect.value;
+    clear(refs.publisherSelect);
+    const placeholder = el('option', null, '请选择发布端');
+    placeholder.value = '';
+    refs.publisherSelect.appendChild(placeholder);
+    publishNodes().forEach(function (node) {
+      const option = el('option', null, textOr(node.hostname, node.id) + '（' + textOr(node.id) + '）');
+      option.value = String(node.id);
+      refs.publisherSelect.appendChild(option);
+    });
+    refs.publisherSelect.value = previous;
+  }
+
+  function renderEndpoints() {
+    if (!refs || !refs.endpointsBody) return;
+    const body = refs.endpointsBody;
+    clear(body);
+    const pubs = publishNodes();
+    if (pubs.length === 0) {
+      body.appendChild(el('p', 'muted', '尚未注册发布端。点击右上角「生成注册令牌」，在发布端主机执行注册命令；注册完成后这里会显示发布端及其心跳。'));
+      return;
+    }
+    const built = createTable([
+      { label: '主机名' },
+      { label: '发布端 ID' },
+      { label: '状态' },
+      { label: '最后心跳' },
+    ], 'data-table--compact');
+    pubs.forEach(function (node) {
+      const tr = el('tr');
+      const hostTd = el('td', 'cell-host');
+      hostTd.appendChild(el('span', 'cell-host__name', textOr(node.hostname, node.id)));
+      hostTd.appendChild(el('span', 'cell-host__id mono', textOr(node.id)));
+      tr.appendChild(hostTd);
+      tr.appendChild(cell(textOr(node.id), 'mono cell-ellipsis'));
+      const meta = NODE_STATUS_META[node.status] || { label: textOr(node.status), tone: 'muted' };
+      tr.appendChild(cellNode(badge(meta.label, meta.tone)));
+      tr.appendChild(cell(fmtTime(node.last_seen), 'cell-nowrap'));
+      built.tbody.appendChild(tr);
+    });
+    const wrap = el('div', 'table-wrap');
+    wrap.appendChild(built.table);
+    body.appendChild(wrap);
+  }
+
+  async function issuePublishToken() {
+    try {
+      const res = await api('POST', '/bootstrap-tokens', { body: { role: 'publish' }, signal: ac.signal });
+      const server = location.origin;
+      const command = 'tg-agent enroll --server ' + server + ' --bootstrap ' + res.token +
+        ' --ca ca.crt --role publish --state-dir /var/lib/tamperguard-publish\n\n' +
+        '# 注册完成后在发布端主机启动服务：\ntg-publish run --state-dir /var/lib/tamperguard-publish';
+      showTicketDialog('发布端注册令牌', res.token,
+        '令牌仅可使用一次。请把 CA 证书一起带到发布端主机，然后执行：\n' + command);
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '生成注册令牌失败。', 'error');
+    }
+  }
+
   function renderNodeOptions() {
     if (!refs) return;
     const previous = refs.nodeSelect.value;
     clear(refs.nodeSelect);
-    const placeholder = el('option', null, '请选择节点');
+    const placeholder = el('option', null, '请选择被保护节点');
     placeholder.value = '';
     refs.nodeSelect.appendChild(placeholder);
     (Array.isArray(nodes) ? nodes : []).forEach(function (node) {
-      if (!node || !node.id) return;
+      if (!node || !node.id || node.role === 'publish') return;
       const option = el('option', null, textOr(node.hostname, node.id) + '（' + textOr(node.id) + '）');
       option.value = String(node.id);
       refs.nodeSelect.appendChild(option);
     });
     refs.nodeSelect.value = previous;
+    renderPublisherOptions();
+    renderEndpoints();
 
     const errorBox = refs.nodesError;
     clear(errorBox);
@@ -3136,6 +3205,7 @@ function publishView() {
         ? '发布请求已创建（' + requestId + '），等待发布端处理。'
         : '发布请求已创建，等待发布端处理。', 'success');
       refs.publisherInput.value = '';
+      refs.publisherSelect.value = '';
       refs.sourceDirInput.value = '';
       refs.noteInput.value = '';
       refs.nodeSelect.value = '';
@@ -3175,6 +3245,14 @@ function publishView() {
         ],
       }));
 
+      const endpointsPanel = buildPanel('发布端', { bodyClass: 'panel__body' });
+      endpointsPanel.head.appendChild(button('生成注册令牌', {
+        variant: 'primary',
+        size: 'sm',
+        onClick: function () { issuePublishToken(); },
+      }));
+      host.appendChild(endpointsPanel.panel);
+
       const formPanel = buildPanel('新建发布请求', { bodyClass: 'panel__body' });
       formPanel.body.innerHTML = PUBLISH_FORM_HTML; // 静态骨架
       host.appendChild(formPanel.panel);
@@ -3204,6 +3282,8 @@ function publishView() {
         form: form,
         nodeSelect: form.querySelector('#pub-node'),
         publisherInput: form.querySelector('#pub-publisher'),
+        publisherSelect: form.querySelector('#pub-publisher'),
+        endpointsBody: endpointsPanel.body,
         sourceDirInput: form.querySelector('#pub-source'),
         noteInput: form.querySelector('#pub-note'),
         submitBtn: form.querySelector('#pub-submit'),

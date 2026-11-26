@@ -217,6 +217,7 @@ func (s *Server) routes() {
 	m.Handle("DELETE /api/v1/policies/{id}", s.admin(s.handleDeletePolicy))
 
 	m.Handle("GET /api/v1/publish-requests", s.admin(s.handleListPublish))
+	m.Handle("POST /api/v1/bootstrap-tokens", s.admin(s.handleCreateBootstrapToken))
 	m.Handle("POST /api/v1/publish-requests", s.admin(s.handleCreatePublish))
 	m.Handle("GET /api/v1/publish-requests/{id}", s.admin(s.handleGetPublish))
 	m.Handle("POST /api/v1/publish-requests/{id}/cancel", s.admin(s.handleCancelPublish))
