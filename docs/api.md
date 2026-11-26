@@ -144,6 +144,7 @@ write and retries on `EPERM` while the token is valid.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
+| POST | `/agent/attest` | protect 角色 mTLS | `{nonce,attest,signature,pcr,indexes}`：TPM quote，验证 AK 签名与 PCR 摘要，单次 nonce、5 分钟过期 |
 | POST | `/agent/heartbeat` | `{"status","enforcer","policy_digest","caps","degraded","audit_seq","enforcer_healthy"}` | Returns `{"policy":Snapshot,"grants":[...],"revocations":[...],"server_time","heartbeat_interval"}` |
 | POST | `/agent/audit` | `{"records":[...]}` | Batch upload; server verifies chain, returns `{"ack_seq","alerts":[...]}` |
 | POST | `/agent/grants` | `{"active_tokens":["tok_..."]}` | Agent reports which grants it actually installed; used by the publisher readiness check |

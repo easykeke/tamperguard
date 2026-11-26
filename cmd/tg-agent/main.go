@@ -95,7 +95,16 @@ func cmdEnroll(args []string) error {
 	poll := fs.Int("poll", 15, "sync interval in seconds")
 	publisherUIDs := fs.String("publisher-uids", "0", "comma-separated uids allowed to use a live release grant")
 	publisherSIDs := fs.String("publisher-sids", "", "comma-separated Windows accounts/SIDs allowed to use a live grant")
+	tpmAKPub := fs.String("tpm-ak-pub", "", "PEM file with the TPM attestation key public key (enables TPM quote verification)")
 	_ = fs.Parse(args)
+	tpmPub := ""
+	if *tpmAKPub != "" {
+		raw, err := os.ReadFile(*tpmAKPub)
+		if err != nil {
+			return fmt.Errorf("read --tpm-ak-pub: %w", err)
+		}
+		tpmPub = string(raw)
+	}
 
 	state, err := agent.Enroll(context.Background(), agent.EnrollOptions{
 		ServerURL:      *server,
@@ -108,6 +117,7 @@ func cmdEnroll(args []string) error {
 		PollSeconds:    *poll,
 		PublisherUIDs:  parseIntList(*publisherUIDs),
 		PublisherSIDs:  parseStringList(*publisherSIDs),
+		TPMAKPub:       tpmPub,
 	})
 	if err != nil {
 		return err
@@ -392,6 +402,8 @@ func cmdRun(args []string) error {
 	integrityLevel := fs.String("integrity-level", "system", "Windows: mandatory label for protected paths (system needs a SYSTEM service; high/medium/off)")
 	allowAdmins := fs.Bool("windows-allow-admins", false, "Windows: keep write access for the Administrators group (weakens protection; strict by default)")
 	verity := fs.Bool("verity", false, "enable fs-verity on files installed by pull deliveries (read-only + verified reads)")
+	tpmAK := fs.String("tpm-ak-ctx", "", "TPM attestation key context for quote (empty disables TPM attestation)")
+	tpmTCTI := fs.String("tpm-tcti", "", "TPM2 TCTI, e.g. device:/dev/tpmrm0 or swtpm:host=127.0.0.1,port=2321")
 	_ = fs.Parse(args)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -417,6 +429,8 @@ func cmdRun(args []string) error {
 	}
 
 	a, err := agent.New(state, enf, agent.Options{
+		TPMQuoteAK:      *tpmAK,
+		TPMQuoteTCTI:    *tpmTCTI,
 		Logger:          logger,
 		AutoUpgrade:     *autoUpgrade,
 		UpgradeInterval: *upgradeInterval,

@@ -191,7 +191,16 @@ Agent 首次启动时把自身可执行文件、systemd unit（Linux）与 `agen
 
 Agent 每次心跳附带启动证据摘要：Secure Boot 状态（efivars）、TPM 是否可用与 PCR 0/4/7（存在时）、IMA 策略是否存在、内核 cmdline 哈希；这些字段合成一个 `boot_digest`，随 `caps` 上报并在节点详情展示。控制面收到不同摘要时记录告警日志，可据此发现离线修改、rescue 启动、关闭 Secure Boot 等行为。
 
-**边界**：这是证据上报，不是密码学远程证明。还没有做的是 TPM quote（AK 签名 + 控制面验证 nonce），因此不能抵抗"Agent 进程本身被替换后伪造证据"；该能力依赖 TPM 与专用密钥，列为后续。
+**TPM quote（已实现）**：控制面在心跳里下发一次性 nonce，Agent 用 `tpm2-tools` 让 TPM 对 `nonce + PCR[0,4,7]` 签名，上报 `TPMS_ATTEST + TPMT_SIGNATURE + PCR 值`；控制面解析结构、校验 nonce 与 PCR 摘要，再用注册的 AK 公钥验证 ECDSA 签名，通过后记录 `attestation.verified=true`。这抵抗了"进程替换后伪造 boot_digest"：没有 AK 私钥签不出有效 quote。
+
+```bash
+# 注册时登记 AK 公钥
+sudo tg-agent enroll ... --tpm-ak-pub ak.pem
+# 运行时提供 AK 上下文与 TCTI（真机 /dev/tpmrm0，测试用 swtpm）
+sudo tg-agent run --state-dir ... --tpm-ak-ctx ak.ctx --tpm-tcti device:/dev/tpmrm0
+```
+
+实测（swtpm 软件 TPM，真实 TPM2 协议）：`make e2e-tpm-quote` PASS。真机 TPM 与 Windows TBS 后端尚未验证；nonce 一次性、5 分钟过期，重放会被拒。
 
 实测（WSL2，无 TPM/efivars）：
 

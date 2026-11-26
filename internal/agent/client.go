@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -27,6 +28,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/policy"
 	"github.com/easykeke/tamperguard/internal/release"
 	"github.com/easykeke/tamperguard/internal/store"
+	"github.com/easykeke/tamperguard/internal/tpmquote"
 	"github.com/easykeke/tamperguard/internal/uninstall"
 )
 
@@ -136,6 +138,7 @@ type RevocationEntry struct {
 
 // HeartbeatResponse carries policy, grants and revocations.
 type HeartbeatResponse struct {
+	AttestNonce       string            `json:"attest_nonce,omitempty"`
 	Policy            *policy.Snapshot  `json:"policy"`
 	Grants            []policy.Grant    `json:"grants"`
 	Revocations       []RevocationEntry `json:"revocations"`
@@ -150,6 +153,18 @@ func (c *Client) Heartbeat(ctx context.Context, in HeartbeatRequest) (*Heartbeat
 		return nil, err
 	}
 	return &out, nil
+}
+
+// UploadAttestation submits a TPM quote for server-side verification.
+func (c *Client) UploadAttestation(ctx context.Context, nonce string, ev tpmquote.Evidence) error {
+	req := map[string]any{
+		"nonce":     nonce,
+		"attest":    base64.StdEncoding.EncodeToString(ev.Attest),
+		"signature": base64.StdEncoding.EncodeToString(ev.Signature),
+		"pcr":       base64.StdEncoding.EncodeToString(ev.PCR),
+		"indexes":   ev.Indexes,
+	}
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/attest", req, nil)
 }
 
 // ---------- audit ----------
@@ -484,6 +499,9 @@ func (c *Client) DownloadUpgrade(ctx context.Context, m release.Manifest, w io.W
 
 // EnrollOptions configures first-time enrolment.
 type EnrollOptions struct {
+	// TPMAKPub is the PEM-encoded TPM attestation key public key, if the host
+	// should be able to submit TPM quotes.
+	TPMAKPub       string
 	ServerURL      string
 	BootstrapToken string
 	Role           string
@@ -588,6 +606,7 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*config.AgentState, error)
 		"role":            opts.Role,
 		"csr_pem":         string(csrPEM),
 		"agent_version":   Version,
+		"tpm_ak_pub":      opts.TPMAKPub,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(opts.ServerURL, "/")+"/api/v1/agent/enroll", bytes.NewReader(payload))

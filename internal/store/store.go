@@ -93,6 +93,10 @@ type Node struct {
 	// that the node is ready for its write, instead of guessing.
 	ActiveGrants []string `json:"active_grants"`
 	PubKey       string   `json:"-"`
+	// AKPub is the TPM attestation key (PEM) registered at enrolment.
+	AKPub string `json:"-"`
+	// Attestation is the last verified TPM quote summary.
+	Attestation json.RawMessage `json:"attestation,omitempty"`
 }
 
 // PublishRequest tracks one release, from request to completion.
@@ -242,7 +246,9 @@ func (s *Store) migrate() error {
 			last_seen INTEGER NOT NULL DEFAULT 0,
 			enrolled_at INTEGER NOT NULL DEFAULT 0,
 			revoked INTEGER NOT NULL DEFAULT 0,
-			pubkey TEXT NOT NULL DEFAULT ''
+			pubkey TEXT NOT NULL DEFAULT '',
+			ak_pub TEXT NOT NULL DEFAULT '',
+			attestation TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS policies (
 			id TEXT PRIMARY KEY,
@@ -365,6 +371,8 @@ func (s *Store) migrate() error {
 	additive := []string{
 		`ALTER TABLE nodes ADD COLUMN active_grants TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE publish_requests ADD COLUMN delivery TEXT NOT NULL DEFAULT 'local'`,
+		`ALTER TABLE nodes ADD COLUMN ak_pub TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE nodes ADD COLUMN attestation TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, q := range additive {
 		if _, err := s.db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -393,15 +401,17 @@ func (s *Store) UpsertNode(n Node) error {
 }
 
 const nodeCols = `id, hostname, role, status, enforcer, policy_id, policy_version, policy_digest,
-	degraded, degraded_approved, caps, agent_version, last_seen, enrolled_at, revoked, active_grants, pubkey`
+	degraded, degraded_approved, caps, agent_version, last_seen, enrolled_at, revoked, active_grants, pubkey,
+	ak_pub, attestation`
 
 func scanNode(sc interface{ Scan(...any) error }) (Node, error) {
 	var n Node
-	var caps, activeGrants string
+	var caps, activeGrants, attestation string
 	var degraded, approved, revoked int
 	err := sc.Scan(&n.ID, &n.Hostname, &n.Role, &n.Status, &n.Enforcer, &n.PolicyID,
 		&n.PolicyVersion, &n.PolicyDigest, &degraded, &approved, &caps,
-		&n.AgentVersion, &n.LastSeen, &n.EnrolledAt, &revoked, &activeGrants, &n.PubKey)
+		&n.AgentVersion, &n.LastSeen, &n.EnrolledAt, &revoked, &activeGrants, &n.PubKey,
+		&n.AKPub, &attestation)
 	if err != nil {
 		return Node{}, err
 	}
@@ -412,6 +422,9 @@ func scanNode(sc interface{ Scan(...any) error }) (Node, error) {
 		caps = "{}"
 	}
 	n.Caps = json.RawMessage(caps)
+	if attestation != "" {
+		n.Attestation = json.RawMessage(attestation)
+	}
 	if activeGrants != "" {
 		if err := json.Unmarshal([]byte(activeGrants), &n.ActiveGrants); err != nil {
 			n.ActiveGrants = nil
@@ -421,6 +434,18 @@ func scanNode(sc interface{ Scan(...any) error }) (Node, error) {
 		n.Role = "protect"
 	}
 	return n, nil
+}
+
+// SetNodeAKPub stores the TPM attestation key registered at enrolment.
+func (s *Store) SetNodeAKPub(id, pem string) error {
+	_, err := s.db.Exec(`UPDATE nodes SET ak_pub=? WHERE id=?`, pem, id)
+	return err
+}
+
+// SetNodeAttestation stores the last verified TPM quote summary.
+func (s *Store) SetNodeAttestation(id, raw string) error {
+	_, err := s.db.Exec(`UPDATE nodes SET attestation=? WHERE id=?`, raw, id)
+	return err
 }
 
 // GetNode returns one node.

@@ -1745,6 +1745,17 @@ function nodesView(options) {
       { label: '注册时间', value: fmtTime(node.enrolled_at) },
     ]));
 
+    if (node.attestation && typeof node.attestation === 'object') {
+      body.appendChild(el('h3', 'section-title', 'TPM 证明'));
+      const att = node.attestation;
+      body.appendChild(defList([
+        { label: '状态', value: att.verified ? '已验证（TPM quote）' : '未验证' },
+        { label: '验证时间', value: fmtTime(att.verified_at) },
+        { label: 'PCR 选择', value: Array.isArray(att.indexes) ? att.indexes.join(', ') : '—', mono: true },
+        { label: 'Quote 摘要', value: shortId(att.quote_sha, 12, 8), mono: true, title: textOr(att.quote_sha, '') },
+      ]));
+    }
+
     body.appendChild(el('h3', 'section-title', '能力探测'));
     const caps = node.caps && typeof node.caps === 'object' ? node.caps : null;
     if (!caps) {

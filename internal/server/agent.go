@@ -20,6 +20,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/release"
 	"github.com/easykeke/tamperguard/internal/store"
 	"github.com/easykeke/tamperguard/internal/token"
+	"github.com/easykeke/tamperguard/internal/tpmquote"
 )
 
 // ---------- enrolment ----------
@@ -32,6 +33,7 @@ type enrollRequest struct {
 	AgentVersion   string          `json:"agent_version"`
 	Enforcer       string          `json:"enforcer"`
 	Caps           json.RawMessage `json:"caps"`
+	TPMAKPub       string          `json:"tpm_ak_pub"`
 }
 
 type enrollResponse struct {
@@ -110,6 +112,15 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
+	}
+	if in.TPMAKPub != "" {
+		if _, err := tpmquote.ParseAKPEM([]byte(in.TPMAKPub)); err != nil {
+			s.log.Warn("enrolment carried an unusable TPM AK key", "agent", agentID, "err", err)
+		} else if err := s.st.SetNodeAKPub(agentID, in.TPMAKPub); err != nil {
+			s.log.Warn("could not store TPM AK key", "agent", agentID, "err", err)
+		} else {
+			s.log.Info("TPM attestation key registered", "agent", agentID)
+		}
 	}
 	s.log.Info("agent enrolled", "agent", agentID, "role", in.Role, "host", in.Hostname)
 
@@ -203,6 +214,7 @@ type revocationView struct {
 }
 
 type heartbeatResponse struct {
+	AttestNonce       string           `json:"attest_nonce,omitempty"`
 	Policy            *policy.Snapshot `json:"policy"`
 	Grants            []policy.Grant   `json:"grants"`
 	Revocations       []revocationView `json:"revocations"`
@@ -249,6 +261,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := heartbeatResponse{
+		AttestNonce:       s.issueAttestNonce(agentID),
 		ServerTime:        s.now().Unix(),
 		HeartbeatInterval: s.cfg.HeartbeatSeconds,
 		Grants:            []policy.Grant{},

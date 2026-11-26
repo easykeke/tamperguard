@@ -63,6 +63,9 @@ type Server struct {
 	ui  fs.FS
 	hub *Hub
 
+	attestMu     sync.Mutex
+	attestNonces map[string]attestNonce
+
 	stop     chan struct{}
 	stopOnce sync.Once
 }
@@ -77,7 +80,7 @@ func New(cfg *config.Server, st *store.Store, opts Options) (*Server, error) {
 		opts.Now = time.Now
 	}
 	s := &Server{cfg: cfg, st: st, log: opts.Logger, now: opts.Now, ui: opts.UI, hub: NewHub(),
-		stop: make(chan struct{})}
+		stop: make(chan struct{}), attestNonces: map[string]attestNonce{}}
 
 	var err error
 	if s.sessionKey, err = cfg.SessionKeyBytes(); err != nil {
@@ -194,6 +197,7 @@ func (s *Server) routes() {
 	m.Handle("GET /api/v1/agent/upgrade/download", s.agent("protect", s.handleUpgradeDownload))
 	m.Handle("GET /api/v1/agent/stream", s.agent("protect", s.handleStream))
 	m.Handle("GET /api/v1/agent/manifest", s.agent("protect", s.handleSiteManifest))
+	m.Handle("POST /api/v1/agent/attest", s.agent("protect", s.handleAttestation))
 	m.Handle("POST /api/v1/agent/uninstall/request", s.agent("protect", s.handleUninstallRequest))
 	m.Handle("GET /api/v1/agent/uninstall/{id}", s.agent("protect", s.handleUninstallStatus))
 

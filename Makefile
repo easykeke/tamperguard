@@ -80,6 +80,10 @@ e2e-proxy-signed:
 e2e-selfprotect:
 	bash test/e2e/e2e-selfprotect.sh
 
+## e2e-tpm-quote: TPM 2.0 quote attestation over swtpm
+e2e-tpm-quote:
+	bash test/e2e/e2e-tpm-quote.sh
+
 ## e2e-selfcheck: agent self-check and boot-evidence reporting
 e2e-selfcheck:
 	bash test/e2e/e2e-selfcheck.sh

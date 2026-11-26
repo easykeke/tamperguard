@@ -471,7 +471,18 @@ sudo tg-agent selfcheck --state-dir /var/lib/tamperguard-agent
 
 **内核级自保护（Linux）**：Agent 会把 systemd unit 与 `agent.json` 纳入 eBPF 保护，只有 Agent 进程本身可写；root shell 修改这些文件会得到 EPERM。二进制文件不在内核保护集（否则无法再次执行），由自检基线与 root:root 权限覆盖。解除保护只能 `tg-agent ebpf-detach`（会一并解除站点防护）或走卸载流程。
 
-注意：这是**检测与证据**，不是密码学远程证明（未做 TPM quote）；Linux 上也不阻止 root 替换二进制，但会让替换留下审计痕迹。Windows 安装脚本已把程序与状态目录限制为 SYSTEM 完全控制、Administrators 只读。
+**TPM quote（可选）**：如果主机有 TPM 2.0，可让控制面对启动状态做密码学验证：
+
+```bash
+# 注册时登记 AK 公钥（PEM）
+sudo tg-agent enroll ... --tpm-ak-pub /path/ak.pem
+
+# 运行时指定 AK 上下文与 TCTI（真机示例；测试可用 swtpm:host=...,port=...）
+sudo tg-agent run --state-dir /var/lib/tamperguard-agent \
+  --tpm-ak-ctx /path/ak.ctx --tpm-tcti device:/dev/tpmrm0
+```
+
+控制面在心跳里下发一次性 nonce，Agent 用 TPM 对 `nonce + PCR[0,4,7]` 签名，控制面验证签名与 PCR 摘要后写入 `attestation.verified`，节点详情「TPM 证明」可见。Linux 上不阻止 root 替换二进制，但会让替换留下审计痕迹；Windows 安装脚本已把程序与状态目录限制为 SYSTEM 完全控制、Administrators 只读。
 
 ### 9.7 eBPF 链接固化与维护
 

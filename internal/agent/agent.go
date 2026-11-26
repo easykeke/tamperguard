@@ -37,6 +37,11 @@ type Options struct {
 	RASP bool
 	// RASPSocket overrides the probe socket path (default <stateDir>/rasp.sock).
 	RASPSocket string
+	// TPMQuoteAK is the path to a TSS2 key context for TPM quote (empty disables).
+	TPMQuoteAK string
+	// TPMQuoteTCTI is the TPM2 TCTI string, e.g. "device:/dev/tpmrm0" or
+	// "swtpm:host=127.0.0.1,port=2321".
+	TPMQuoteTCTI string
 	// Verity enables fs-verity on files installed by pull deliveries.
 	Verity bool
 }
@@ -60,6 +65,8 @@ type Agent struct {
 	reported     []string // grant token IDs last reported to the control plane
 	wake         chan struct{}
 	upgradeReady chan struct{}
+	attestMu     sync.Mutex
+	attestNonce  string
 }
 
 // New builds an agent from persisted state.
@@ -366,6 +373,7 @@ func (a *Agent) tick(ctx context.Context) {
 	if err := a.sync(ctx); err != nil {
 		a.log.Warn("heartbeat failed", "err", err)
 	}
+	a.maybeAttest(ctx)
 	if a.state.Role == "protect" {
 		a.deliverPending(ctx)
 	}
@@ -401,6 +409,11 @@ func (a *Agent) sync(ctx context.Context) error {
 	})
 	if err != nil {
 		return err
+	}
+	if resp.AttestNonce != "" {
+		a.attestMu.Lock()
+		a.attestNonce = resp.AttestNonce
+		a.attestMu.Unlock()
 	}
 
 	revs := enforcer.RevocationSet{}
