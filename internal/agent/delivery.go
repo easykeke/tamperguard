@@ -65,6 +65,8 @@ func (a *Agent) deliverOne(ctx context.Context, req store.PublishRequest) {
 			return
 		}
 		written++
+		a.record(audit.KindPublishFile, f.Path, fmt.Sprintf(
+			"request=%s sha256=%s size=%d delivery=pull", req.ID, f.SHA256, f.Size))
 	}
 	if a.opts.Verity {
 		a.enableVerity(root, info.Files)
@@ -77,7 +79,8 @@ func (a *Agent) deliverOne(ctx context.Context, req store.PublishRequest) {
 		return
 	}
 	_ = a.client.CompleteDelivery(ctx, req.ID, true, "", verifyDigest, verified)
-	a.record(audit.KindPublishDone, "", fmt.Sprintf("pull delivery %s: %d files verified", req.ID, verified))
+	a.record(audit.KindPublishDone, "", fmt.Sprintf(
+		"request=%s files=%d digest=%s verified=true", req.ID, verified, verifyDigest))
 	a.log.Info("pull delivery installed and verified", "request", req.ID, "files", verified,
 		"digest", verifyDigest)
 }

@@ -1774,3 +1774,48 @@ html[data-theme='light'] .modal-overlay {
 html[data-theme='light'] .code-block {
   background: #f6f8fc;
 }
+
+/* Agent install panel */
+.install-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.install-card {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.install-card__title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.install-card__desc {
+  margin: 0 0 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.install-card .row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detail-cell {
+  max-width: 420px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .install-grid {
+    grid-template-columns: 1fr;
+  }
+}

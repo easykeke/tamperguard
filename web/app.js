@@ -128,6 +128,13 @@ const AUDIT_KIND_LABELS = {
   'agent.heartbeat': 'Agent 心跳',
   'publish.completed': '发布完成',
   'publish.failed': '发布失败',
+  'publish.file': '发布文件写入',
+  'tamper.restored': '篡改已恢复',
+  'agent.selfcheck_failed': 'Agent 自检失败',
+  'uninstall.requested': '卸载请求',
+  'uninstall.approved': '卸载批准',
+  'uninstall.denied': '卸载拒绝',
+  'uninstall.completed': '卸载完成',
 };
 
 const ERROR_CODE_LABELS = {
@@ -743,6 +750,7 @@ function createAuditTable() {
     { label: '类型' },
     { label: '路径' },
     { label: '主体' },
+    { label: '详情' },
     { label: '结果' },
   ]);
 }
@@ -762,6 +770,8 @@ function auditRow(record) {
 
   tr.appendChild(cell(textOr(rec.path), 'mono cell-ellipsis', textOr(rec.path)));
   tr.appendChild(cell(textOr(rec.subject), 'cell-ellipsis', textOr(rec.subject)));
+  const detailText = typeof rec.detail === 'string' ? rec.detail : '';
+  tr.appendChild(cell(detailText || '—', 'detail-cell cell-ellipsis', detailText));
 
   const decisionRaw = typeof rec.decision === 'string' ? rec.decision.trim() : '';
   const decisionMeta = DECISION_META[decisionRaw];
@@ -1754,6 +1764,63 @@ function nodesView(options) {
     return tr;
   }
 
+
+  async function issueAgentToken(role) {
+    const isPublish = role === 'publish';
+    const title = isPublish ? '发布端安装' : '被防护端安装';
+    try {
+      const res = await api('POST', '/bootstrap-tokens', { body: { role: role }, signal: ac.signal });
+      const server = location.origin;
+      const download = server + '/api/v1/downloads/agent?role=' + role;
+      const enroll = isPublish
+        ? 'tg-agent enroll --server ' + server + ' --bootstrap ' + res.token +
+          ' --ca ca.crt --role publish --state-dir /var/lib/tamperguard-publish'
+        : 'tg-agent enroll --server ' + server + ' --bootstrap ' + res.token +
+          ' --ca ca.crt --role protect --state-dir /var/lib/tamperguard-agent --publisher-uids 0';
+      const run = isPublish
+        ? 'tg-publish run --state-dir /var/lib/tamperguard-publish'
+        : 'tg-agent run --state-dir /var/lib/tamperguard-agent';
+      const detail = '下载：' + download + '\n\n' +
+        '将 CA 证书（控制面 <数据目录>/keys/ca.crt）与二进制一起带到目标主机，然后执行：\n\n' +
+        enroll + '\n\n# 常驻运行：\n' + run + '\n\n' +
+        'Windows 被防护端：使用 deploy/windows/install-service.ps1 安装为服务，注册参数相同。';
+      showTicketDialog(title, res.token, detail);
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '生成安装令牌失败。', 'error');
+    }
+  }
+
+  function renderAgentInstallPanel(host) {
+    const panel = buildPanel('Agent 下载与安装', { bodyClass: 'panel__body' });
+    const grid = el('div', 'install-grid');
+
+    function card(role, title, desc) {
+      const box = el('div', 'install-card');
+      box.appendChild(el('h3', 'install-card__title', title));
+      box.appendChild(el('p', 'install-card__desc', desc));
+      const actions = el('div', 'row-actions');
+      const link = el('a', 'btn btn--sm', '下载安装包');
+      link.href = '/api/v1/downloads/agent?role=' + role;
+      link.setAttribute('download', '');
+      actions.appendChild(link);
+      actions.appendChild(button('生成安装令牌', {
+        variant: 'primary',
+        size: 'sm',
+        onClick: function () { issueAgentToken(role); },
+      }));
+      box.appendChild(actions);
+      return box;
+    }
+
+    grid.appendChild(card('protect', '被防护端 Agent（Linux / Windows）',
+      '安装到被保护主机，执行文件层阻断与自愈。下载后按提示注册为服务。'));
+    grid.appendChild(card('publish', '发布端 Agent',
+      '安装到发布/构建主机，执行同步任务。支持本机写入与跨机 pull 两种方式。'));
+    panel.body.appendChild(grid);
+    host.appendChild(panel.panel);
+  }
+
   function renderList() {
     if (!listRefs) return;
     const list = visibleNodes();
@@ -2143,6 +2210,8 @@ function nodesView(options) {
           button('刷新', { onClick: function () { loadNodes(); } }),
         ],
       }));
+
+      renderAgentInstallPanel(host);
 
       const panelRef = buildPanel('节点列表', { bodyClass: 'panel__body panel__body--flush' });
       const count = el('span', 'panel__meta', '');

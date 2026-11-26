@@ -81,6 +81,7 @@ Two independent authentication schemes share one listener:
 ### Nodes
 | Method | Path | Body | Notes |
 |---|---|---|---|
+| GET | `/downloads/agent?role=protect\|publish` | — | 下载对应 Agent 二进制（控制面 `<data-dir>/downloads/`），用于管理页安装入口 |
 | GET | `/nodes` | — | List of Node |
 | GET | `/nodes/{id}` | — | Node + `recent_audit` (last 20 records) |
 | POST | `/nodes/{id}/degraded-approval` | `{"approved": true}` | Admin explicitly accepts degraded protection |

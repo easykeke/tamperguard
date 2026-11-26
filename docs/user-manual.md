@@ -219,6 +219,15 @@ sudo -u tgpublish tg-publish run --state-dir /var/lib/tamperguard-publish
 
 （发布端账号需要目标目录的写权限；`deploy/systemd/tamperguard-publish.service` 已使用 `User=tgpublish`。）
 
+### 4.4 从管理端下载并安装 Agent
+
+「节点」页顶部新增「Agent 下载与安装」面板：
+
+- **被防护端**：下载 `tg-agent`，点「生成安装令牌」，按弹窗命令注册并启动；
+- **发布端**：下载 `tg-publish`（含 `tg-agent` 注册时使用），同样生成令牌后按提示执行；
+- 下载地址走登录会话（`/api/v1/downloads/agent?role=protect|publish`），二进制由控制面 `<数据目录>/downloads/` 提供；
+- 弹窗同时给出 CA 证书位置、enroll 命令、常驻运行命令；Windows 被防护端使用 `deploy/windows/install-service.ps1`。
+
 ### 4.3 确认上线
 
 管理端「节点」页应看到 protect/publish 两类节点；被保护节点的「执行层」应为 `ebpf-lsm`（或预期的降级层）。CLI 方式：
@@ -380,7 +389,8 @@ curl -sk -b cookies -H 'Content-Type: application/json' \
 
 - 每条记录包含：序号、前一条哈希、自身哈希、Ed25519 签名、节点、类型、路径、主体、时间。
 - 服务端按 Agent 维护 `next_seq/last_hash`，发现缺口或分叉会告警。
-- 常见类型：`write.blocked`、`write.allowed`、`write.observed`、`token.issued/revoked`、`policy.applied`、`publish.completed/failed`、`rasp.observed/blocked`、`tamper.restored`、`enforcer.error`、`agent.*`。
+- 常见类型：`write.blocked`、`write.allowed`、`write.observed`、`token.issued/revoked`、`policy.applied`、`publish.file`（逐文件）、`publish.completed/failed`、`rasp.observed/blocked`、`tamper.restored`、`enforcer.error`、`agent.*`。
+- 审计页「详情」列记录可追溯的内容：发布写入记录包含 `request`、`sha256`、`size`、`delivery`；发布完成记录包含文件数与发布摘要；被拦截的篡改包含 `tampered_sha256`、`size` 以及主体 `pid/uid/exe`（fanotify 会在回滚前读取被篡改内容并计算哈希）。
 
 导出：
 

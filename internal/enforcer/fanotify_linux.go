@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -330,6 +331,22 @@ func (f *Fanotify) handleMetadata(md *unix.FanotifyEventMetadata) {
 	f.handleCloseWrite(path, int(md.Pid))
 }
 
+// tamperFingerprint records what the attacker actually wrote before the file is
+// restored, so the audit trail contains the attempted content hash.
+func tamperFingerprint(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("tampered_sha256=%s size=%d", hex.EncodeToString(h.Sum(nil)), n)
+}
+
 func (f *Fanotify) handleCloseWrite(path string, pid int) {
 	f.mu.Lock()
 	rt := f.rt
@@ -361,14 +378,19 @@ func (f *Fanotify) handleCloseWrite(path string, pid int) {
 	if f.recentlyRestored(path) {
 		return
 	}
+	fingerprint := tamperFingerprint(path)
 	if err := f.base.RestoreTree(path); err != nil {
 		f.log.Error("fanotify: restore failed", "path", path, "err", err)
+	}
+	reason := d.Reason
+	if fingerprint != "" {
+		reason = fingerprint + "; " + reason
 	}
 	kind := audit.KindWriteBlocked
 	if d.Mode == policy.ModeObserve {
 		kind = audit.KindWriteObserved
 	}
-	f.emit(Event{Time: now, Kind: kind, Path: path, Op: req.Op, Subject: subj, Reason: d.Reason})
+	f.emit(Event{Time: now, Kind: kind, Path: path, Op: req.Op, Subject: subj, Reason: reason})
 }
 
 // recentlyRestored debounces restores for one path (an attacker writing in a

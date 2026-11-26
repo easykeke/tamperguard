@@ -39,6 +39,7 @@ const (
 	KindEnforcerError  = "enforcer.error"
 	KindAgentStarted   = "agent.started"
 	KindAgentHeartbeat = "agent.heartbeat"
+	KindPublishFile    = "publish.file"
 	KindPublishDone    = "publish.completed"
 	KindPublishFailed  = "publish.failed"
 	// RASP events come from the application-layer probe (runtime writes by a
