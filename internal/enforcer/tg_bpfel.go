@@ -97,6 +97,7 @@ type tgMapSpecs struct {
 	Publishers     *ebpf.MapSpec `ebpf:"publishers"`
 	TgConfig       *ebpf.MapSpec `ebpf:"tg_config"`
 	TgSeen         *ebpf.MapSpec `ebpf:"tg_seen"`
+	TgSelfPids     *ebpf.MapSpec `ebpf:"tg_self_pids"`
 	TgStats        *ebpf.MapSpec `ebpf:"tg_stats"`
 }
 
@@ -126,6 +127,7 @@ type tgMaps struct {
 	Publishers     *ebpf.Map `ebpf:"publishers"`
 	TgConfig       *ebpf.Map `ebpf:"tg_config"`
 	TgSeen         *ebpf.Map `ebpf:"tg_seen"`
+	TgSelfPids     *ebpf.Map `ebpf:"tg_self_pids"`
 	TgStats        *ebpf.Map `ebpf:"tg_stats"`
 }
 
@@ -138,6 +140,7 @@ func (m *tgMaps) Close() error {
 		m.Publishers,
 		m.TgConfig,
 		m.TgSeen,
+		m.TgSelfPids,
 		m.TgStats,
 	)
 }

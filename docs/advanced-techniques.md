@@ -199,3 +199,24 @@ Agent 每次心跳附带启动证据摘要：Secure Boot 状态（efivars）、T
 [ok] boot digest reported: affe3474b9db…
 [ok] secure boot state reported: unknown
 ```
+
+## P6.2b 内核级 Agent 自保护
+
+在检测之外，Agent 的自身文件现在由内核保护：eBPF 程序新增 `tg_self_pids` 映射，只有 Agent 进程自己的 pid 被允许写自身路径；Agent 启动时把 systemd unit 与 `agent.json` 合并进保护集合（可执行文件本身不在内核保护集：保护它的 inode 会让后续 exec 触发同组 mmap/mprotect 钩子而崩溃；二进制由自检基线与 root:root 权限覆盖），且每次策略同步都会重新合并（策略更新不会把自身路径漏掉）。
+
+- root shell 对 `agent.json`/unit 的写、chmod → EPERM；
+- Agent 自身写审计、读取状态正常；
+- 自我升级由 Agent 进程执行（pid 在允许表内），不受影响；
+- 解除保护只能 `tg-agent ebpf-detach`（同时关闭全部策略）或卸载流程，两者都会先关闭配置 map。
+
+实测：
+
+```
+[ok] self-protection active: paths=2
+[ok] config chmod denied: Operation not permitted
+[ok] config write denied
+[ok] node still online (agent can write its own files)
+[ok] root can chmod the config after explicit detach
+```
+
+边界：root 仍可卸载/替换整个 BPF 程序（需要显式 detach），但"删改 Agent 文件即绕过"这条路径被堵死，且 detach 会留下操作痕迹。

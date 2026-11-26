@@ -151,6 +151,14 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	// Signed self-upgrade channel. When a new binary is staged the loop stops
 	// so the service manager can restart into it.
+	if sp, ok := a.enf.(enforcer.SelfProtector); ok {
+		paths := a.selfProtectPaths()
+		if err := sp.SetSelfPaths(paths); err != nil {
+			a.log.Warn("self-protection not applied", "err", err)
+		} else {
+			a.log.Info("self-protection active", "paths", len(paths))
+		}
+	}
 	if a.opts.AutoUpgrade {
 		go a.upgradeLoop(ctx)
 	}
@@ -304,6 +312,22 @@ func (a *Agent) selfcheckLoop(ctx context.Context) {
 			a.runSelfcheck(baseline)
 		}
 	}
+}
+
+// selfProtectPaths are the agent files protected in the kernel. The executable is
+// deliberately excluded: protecting its inode makes every later exec of that
+// binary fail (the loader's mmap/mprotect calls hit the same hooks), which would
+// break upgrades and even `tg-agent ebpf-detach`. The binary is covered by the
+// self-check baseline and by root-owned 0755 permissions instead.
+func (a *Agent) selfProtectPaths() []string {
+	paths := []string{filepath.Join(a.state.StateDir, config.AgentStateFile)}
+	if runtime.GOOS == "linux" {
+		unit := "/etc/systemd/system/tamperguard-agent.service"
+		if _, err := os.Stat(unit); err == nil {
+			paths = append(paths, unit)
+		}
+	}
+	return paths
 }
 
 func (a *Agent) selfcheckPaths() []string {

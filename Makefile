@@ -76,6 +76,10 @@ e2e-landlock:
 e2e-proxy-signed:
 	bash test/e2e/e2e-proxy-signed.sh
 
+## e2e-selfprotect: kernel-protected agent files (root denied)
+e2e-selfprotect:
+	bash test/e2e/e2e-selfprotect.sh
+
 ## e2e-selfcheck: agent self-check and boot-evidence reporting
 e2e-selfcheck:
 	bash test/e2e/e2e-selfcheck.sh

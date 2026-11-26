@@ -96,6 +96,12 @@ type Event struct {
 	Reason  string
 }
 
+// SelfProtector is implemented by backends that can protect the agent's own
+// files in the kernel. The agent's process is the only allowed writer.
+type SelfProtector interface {
+	SetSelfPaths(paths []string) error
+}
+
 // Enforcer is implemented by every enforcement backend.
 type Enforcer interface {
 	// Name returns the backend name: ebpf-lsm, fanotify or observe.

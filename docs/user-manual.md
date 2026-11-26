@@ -469,6 +469,8 @@ sudo tg-agent selfcheck --state-dir /var/lib/tamperguard-agent
 
 **启动证据**：每次心跳附带 Secure Boot 状态、TPM 是否可用、IMA 是否存在、内核 cmdline 哈希，合并为 `boot_digest`，节点详情「能力探测」中可见。控制面发现摘要变化会记录告警，可暴露离线修改或 rescue 启动。
 
+**内核级自保护（Linux）**：Agent 会把 systemd unit 与 `agent.json` 纳入 eBPF 保护，只有 Agent 进程本身可写；root shell 修改这些文件会得到 EPERM。二进制文件不在内核保护集（否则无法再次执行），由自检基线与 root:root 权限覆盖。解除保护只能 `tg-agent ebpf-detach`（会一并解除站点防护）或走卸载流程。
+
 注意：这是**检测与证据**，不是密码学远程证明（未做 TPM quote）；Linux 上也不阻止 root 替换二进制，但会让替换留下审计痕迹。Windows 安装脚本已把程序与状态目录限制为 SYSTEM 完全控制、Administrators 只读。
 
 ### 9.7 eBPF 链接固化与维护

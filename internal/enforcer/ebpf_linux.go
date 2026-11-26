@@ -83,12 +83,13 @@ var opNames = map[uint32]policy.Op{
 // EBPF is the kernel-backed enforcer. It owns the loaded programs and the
 // inode/grant maps, and turns ring buffer records into audit events.
 type EBPF struct {
-	objs   tgObjects
-	links  []link.Link
-	pinned []string
-	reader *ringbuf.Reader
-	events *Buffer
-	log    *slog.Logger
+	objs      tgObjects
+	links     []link.Link
+	pinned    []string
+	selfPaths []string
+	reader    *ringbuf.Reader
+	events    *Buffer
+	log       *slog.Logger
 
 	// publisherUIDs are the uids that may use a live grant. A token authorises
 	// a publisher identity; the kernel can only see uids, so the mapping is
@@ -143,6 +144,10 @@ func NewEBPF(publisherUIDs []int) (*EBPF, error) {
 		paths:         map[tgInodeKey]string{},
 		grantKeys:     map[tgGrantKey]uint64{},
 		closed:        make(chan struct{}),
+	}
+	// The agent process itself is the only writer allowed on its own files.
+	if err := objs.TgSelfPids.Update(uint32(os.Getpid()), uint8(1), ebpf.UpdateAny); err != nil {
+		slog.Default().Warn("enforcer: self-protection pid not registered", "err", err)
 	}
 	progs := []struct {
 		name string
@@ -212,6 +217,25 @@ func (e *EBPF) Capability() Capability {
 	return Capability{Kind: "ebpf-lsm", Available: true, Degraded: false, Reason: "kernel LSM hooks attached"}
 }
 
+// SetSelfPaths protects the agent's own files. The agent's pid is inserted in the
+// kernel self-pid map, so the agent keeps working while any other process —
+// including root — is denied writes to these paths.
+func (e *EBPF) SetSelfPaths(paths []string) error {
+	e.selfPaths = append([]string(nil), paths...)
+	for _, p := range paths {
+		_, files, err := collectInodes(p, false)
+		if err != nil {
+			return err
+		}
+		for k := range files {
+			if err := e.objs.ProtectedFiles.Update(k, uint8(modeEnforce), ebpf.UpdateAny); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Update rebuilds the protected sets and grant table from the runtime state.
 //
 // Protection changes are applied as a diff: new entries are added before stale
@@ -250,6 +274,17 @@ func (e *EBPF) Update(rt Runtime) error {
 			merge(desiredDirs, dirs, mode)
 			merge(desiredFiles, files, mode)
 		}
+	}
+
+	// Self-protection paths are merged on every update so a policy sync cannot
+	// silently drop the agent's own files from the protected set.
+	for _, p := range e.selfPaths {
+		dirs, files, err := collectInodes(p, false)
+		if err != nil {
+			continue
+		}
+		merge(desiredDirs, dirs, modeEnforce)
+		merge(desiredFiles, files, modeEnforce)
 	}
 
 	grantNow := bootTimeNs()

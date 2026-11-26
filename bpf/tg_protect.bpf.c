@@ -111,6 +111,18 @@ struct {
 	__type(value, __u64); /* expiry in ns since boot */
 } grants SEC(".maps");
 
+/*
+ * Pids allowed to write the agent's own protected files (binary, unit, config).
+ * Only the agent process itself is inserted; a root shell or another binary
+ * cannot write those paths even as uid 0.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 64);
+	__type(key, __u32);
+	__type(value, __u8);
+} tg_self_pids SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(max_entries, 1);
@@ -207,6 +219,13 @@ static __always_inline __u8 inode_mode(void *map, struct inode *inode)
 	return v ? *v : 0;
 }
 
+static __always_inline int self_allowed(void)
+{
+	__u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	__u8 *v = bpf_map_lookup_elem(&tg_self_pids, &pid);
+	return v && *v == 1;
+}
+
 static __always_inline int inode_granted(struct inode *inode)
 {
 	struct grant_key k = {};
@@ -255,6 +274,8 @@ static __always_inline int decide(struct inode *inode, struct inode *parent, __u
 		mode = inode_mode(&protected_dirs, parent);
 	if (!mode)
 		return 0;
+	if (self_allowed())
+		return 0;
 	bump(1);
 
 	if (inode_granted(inode) || inode_granted(parent)) {
@@ -279,6 +300,8 @@ static __always_inline int decide_dir(struct inode *dir, __u32 op)
 		return 0;
 	mode = inode_mode(&protected_dirs, dir);
 	if (!mode)
+		return 0;
+	if (self_allowed())
 		return 0;
 	if (inode_granted(dir)) {
 		emit(dir, op, V_ALLOW, 0);

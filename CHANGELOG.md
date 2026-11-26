@@ -8,6 +8,8 @@
 - **Agent 自检（P6.2）**：自身二进制/unit/配置哈希基线，启动与每 5 分钟复核，变化写入审计链 `agent.selfcheck_failed`；`tg-agent selfcheck` 手动检查。
 - **启动证据（P6.3）**：心跳上报 Secure Boot、TPM/PCR、IMA、cmdline 摘要为 `boot_digest`，节点详情展示，控制面记录摘要变化告警。是证据上报，不是 TPM quote 远程证明。
 
+- **内核级 Agent 自保护**：eBPF 新增 `tg_self_pids` 映射，仅 Agent 进程可写自身 unit/config（二进制由自检与权限覆盖）；root 修改返回 EPERM，策略同步自动合并自身路径；`make e2e-selfprotect` 验证。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。
