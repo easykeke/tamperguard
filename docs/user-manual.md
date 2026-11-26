@@ -298,6 +298,21 @@ curl -sk -b cookies -H 'Content-Type: application/json' \
    - 逐文件复核哈希后原子写入（临时文件 + rename）；
 3. 完成状态变为 `done`；管理端可看到令牌、耗时、文件数。
 
+### 6.2.1 发布端手动触发（无需管理端建请求）
+
+发布端可以自己发起一次同步并等待结果，适合脚本/CI 直接调用：
+
+```bash
+tg-publish sync --state-dir /var/lib/tamperguard-publish \
+  --node n_xxxxxxxx --source /srv/release --target /var/www/site \
+  --mode incremental --delivery pull --note "CI #123" --timeout 5m
+```
+
+- `--mode full|incremental`：同上表；
+- `--delivery pull|local`：`pull`（默认）把制品上传控制面，由目标节点拉取；`local` 要求发布端能直接写目标目录；
+- 命令会创建请求、立即处理、轮询到 `done`/`failed` 后退出（失败返回非零）；
+- 发布端服务（`tg-publish run`）不需要停，两者可同时存在。
+
 ### 6.3 跨机发布（pull）
 
 创建请求时加 `"delivery":"pull"`：

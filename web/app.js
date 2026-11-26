@@ -233,6 +233,14 @@ const PUBLISH_FORM_HTML = `
       <p class="field-hint muted">跨机发布时，选择 pull：制品传到控制面，目标节点拉取并校验后安装。</p>
     </div>
     <div class="field">
+      <label class="label" for="pub-mode">同步模式</label>
+      <select id="pub-mode" class="select">
+        <option value="full">全量（写入源目录所有文件）</option>
+        <option value="incremental">增量（仅写入哈希变化的文件）</option>
+      </select>
+      <p class="field-hint muted">增量模式按 SHA-256 比对目标/上次发布，未变化的文件跳过；文件内容始终逐个哈希校验。</p>
+    </div>
+    <div class="field">
       <label class="label" for="pub-source">源目录 <span class="req">*</span></label>
       <input id="pub-source" class="input" type="text" spellcheck="false"
              autocomplete="off" placeholder="如 /var/www/releases/v42">
@@ -3073,6 +3081,8 @@ function publishView() {
     tr.appendChild(cell(textOr(req.publisher_id), 'mono cell-nowrap'));
     const deliveryPull = String(req.delivery || 'local') === 'pull';
     tr.appendChild(cellNode(badge(deliveryPull ? '跨机拉取' : '本机写入', deliveryPull ? 'info' : 'muted')));
+    const incr = String(req.mode || 'full') === 'incremental';
+    tr.appendChild(cellNode(badge(incr ? '增量' : '全量', incr ? 'ok' : 'muted')));
     tr.appendChild(cell(textOr(req.source_dir), 'mono cell-ellipsis', textOr(req.source_dir)));
 
     const statusMeta = PUBLISH_STATUS_META[req.status] || { label: textOr(req.status), tone: 'muted' };
@@ -3114,6 +3124,7 @@ function publishView() {
       { label: '节点' },
       { label: '发布端' },
       { label: '方式' },
+      { label: '模式' },
       { label: '源目录' },
       { label: '状态' },
       { label: '备注' },
@@ -3201,6 +3212,7 @@ function publishView() {
       target_dir: refs.targetInput.value.trim(),
       note: refs.noteInput.value.trim(),
       delivery: refs.deliverySelect.value,
+      mode: refs.modeSelect.value,
     };
     const problems = [];
     if (!values.node_id) problems.push({ key: 'node_id', message: '请选择目标节点。' });
@@ -3229,6 +3241,7 @@ function publishView() {
       refs.publisherSelect.value = '';
       refs.targetInput.value = '';
       if (refs.deliverySelect) refs.deliverySelect.value = 'local';
+      if (refs.modeSelect) refs.modeSelect.value = 'full';
       refs.sourceDirInput.value = '';
       refs.noteInput.value = '';
       refs.nodeSelect.value = '';
@@ -3307,6 +3320,7 @@ function publishView() {
         publisherInput: form.querySelector('#pub-publisher'),
         publisherSelect: form.querySelector('#pub-publisher'),
         deliverySelect: form.querySelector('#pub-delivery'),
+        modeSelect: form.querySelector('#pub-mode'),
         endpointsBody: endpointsPanel.body,
         sourceDirInput: form.querySelector('#pub-source'),
         targetInput: form.querySelector('#pub-target'),

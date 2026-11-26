@@ -511,6 +511,26 @@ func (s *Server) handleAuditUpload(w http.ResponseWriter, r *http.Request) {
 
 // ---------- publish agent endpoints ----------
 
+// handlePublishGet returns one request to its publisher, used by the manual
+// `tg-publish sync` command to wait for completion.
+func (s *Server) handlePublishGet(w http.ResponseWriter, r *http.Request) {
+	publisherID, _ := clientCN(r)
+	req, err := s.st.GetPublishRequest(r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "publish request not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if req.PublisherID != publisherID {
+		writeErr(w, http.StatusForbidden, "forbidden", "request belongs to another publisher")
+		return
+	}
+	writeJSON(w, http.StatusOK, req)
+}
+
 func (s *Server) handlePublishPending(w http.ResponseWriter, r *http.Request) {
 	cn, _ := clientCN(r)
 	rs, err := s.st.ListPendingForPublisher(cn)

@@ -117,6 +117,9 @@ Publisher-agent endpoints (mTLS, role=publish):
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
+| POST | `/publish/sync` | publish 角色 mTLS | `{node_id,source_dir,target_dir,mode,delivery,note}`：发布端自行创建并触发一次发布，返回请求对象 |
+| GET | `/publish/current?node_id=` | publish 角色 mTLS | 该节点最近一次成功发布的清单（增量比对基线） |
+| GET | `/publish/{id}` | publish 角色 mTLS | 查询自己创建的发布请求（CLI 等待用） |
 | GET | `/publish/pending` | — | Requests assigned to the calling publisher |
 | POST | `/publish/{id}/artifact` | raw body + `X-TG-SHA256` header, query `?path=<rel>` | Stages one file for pull delivery (must be uploaded before the manifest) |
 | POST | `/publish/{id}/manifest` | `{"manifest":"sha256:...","files":[{"path","sha256","size"}]}` | → `{"token","expires_at","token_id","paths"}`; in pull mode every file must match a staged artefact |

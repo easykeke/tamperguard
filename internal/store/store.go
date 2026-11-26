@@ -110,13 +110,17 @@ type PublishRequest struct {
 	Status      string `json:"status"`
 	// Delivery is "local" (publisher writes straight to target_dir) or "pull"
 	// (publisher uploads artefacts; the target node's agent fetches and writes).
-	Delivery  string `json:"delivery"`
-	Manifest  string `json:"manifest"`
-	TokenID   string `json:"token_id"`
-	Error     string `json:"error"`
-	CreatedBy string `json:"created_by"`
-	CreatedAt int64  `json:"created_at"`
-	UpdatedAt int64  `json:"updated_at"`
+	Delivery string `json:"delivery"`
+	// Mode is "full" (write every file in the source tree) or "incremental"
+	// (only files whose hash differs from the target/last release).
+	Mode         string `json:"mode"`
+	SkippedFiles int    `json:"skipped_files"`
+	Manifest     string `json:"manifest"`
+	TokenID      string `json:"token_id"`
+	Error        string `json:"error"`
+	CreatedBy    string `json:"created_by"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
 }
 
 // PublishFile is one entry of a release manifest stored by the control plane.
@@ -146,6 +150,10 @@ const (
 
 // Publish status values.
 const (
+	// Publish modes.
+	ModeFull        = "full"
+	ModeIncremental = "incremental"
+
 	PublishPending   = "pending"
 	PublishManifest  = "manifest_received"
 	PublishToken     = "token_issued"
@@ -371,6 +379,8 @@ func (s *Store) migrate() error {
 	additive := []string{
 		`ALTER TABLE nodes ADD COLUMN active_grants TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE publish_requests ADD COLUMN delivery TEXT NOT NULL DEFAULT 'local'`,
+		`ALTER TABLE publish_requests ADD COLUMN mode TEXT NOT NULL DEFAULT 'full'`,
+		`ALTER TABLE publish_requests ADD COLUMN skipped_files INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN ak_pub TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE nodes ADD COLUMN attestation TEXT NOT NULL DEFAULT ''`,
 	}
@@ -692,18 +702,19 @@ func (s *Store) CreatePublishRequest(r PublishRequest) (PublishRequest, error) {
 	r.CreatedAt = now()
 	r.UpdatedAt = r.CreatedAt
 	_, err := s.db.Exec(`INSERT INTO publish_requests
-		(id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, created_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		r.ID, r.NodeID, r.PublisherID, r.SourceDir, r.TargetDir, r.Note, r.Status, r.Delivery, r.CreatedBy, r.CreatedAt, r.UpdatedAt)
+		(id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, skipped_files, created_by, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ID, r.NodeID, r.PublisherID, r.SourceDir, r.TargetDir, r.Note, r.Status, r.Delivery,
+		r.Mode, r.SkippedFiles, r.CreatedBy, r.CreatedAt, r.UpdatedAt)
 	return r, err
 }
 
-const publishCols = `id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, manifest, token_id, error, created_by, created_at, updated_at`
+const publishCols = `id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, skipped_files, manifest, token_id, error, created_by, created_at, updated_at`
 
 func scanPublish(sc interface{ Scan(...any) error }) (PublishRequest, error) {
 	var r PublishRequest
 	err := sc.Scan(&r.ID, &r.NodeID, &r.PublisherID, &r.SourceDir, &r.TargetDir, &r.Note, &r.Status,
-		&r.Delivery, &r.Manifest, &r.TokenID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
+		&r.Delivery, &r.Mode, &r.SkippedFiles, &r.Manifest, &r.TokenID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -878,6 +889,18 @@ func (s *Store) ClaimPublishDelivery(id, nodeID string) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// LatestCompletedReleaseForNode returns the newest completed release for a node
+// regardless of delivery mode; used for incremental diffing.
+func (s *Store) LatestCompletedReleaseForNode(nodeID string) (PublishRequest, error) {
+	row := s.db.QueryRow(`SELECT `+publishCols+` FROM publish_requests
+		WHERE node_id=? AND status=? ORDER BY updated_at DESC LIMIT 1`, nodeID, PublishDone)
+	r, err := scanPublish(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PublishRequest{}, ErrNotFound
+	}
+	return r, err
 }
 
 // LatestCompletedPublishForNode returns the newest completed pull-mode release

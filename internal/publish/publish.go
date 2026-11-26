@@ -159,6 +159,144 @@ func hexKey(s string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(b), nil
 }
 
+// changedOnly keeps the entries whose target hash differs from known. The
+// returned manifest therefore describes exactly the files this release writes.
+func changedOnly(full *Manifest, known map[string]string) (*Manifest, int) {
+	kept := make([]Entry, 0, len(full.Entries))
+	skipped := 0
+	for _, e := range full.Entries {
+		if known[e.Rel] == e.SHA256 {
+			skipped++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return &Manifest{Digest: digestOf(kept), Entries: kept}, skipped
+}
+
+// hashTree hashes the current files below root; a missing root is an empty tree.
+func hashTree(root string) (map[string]string, error) {
+	out := map[string]string{}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(abs, path)
+		if err != nil {
+			return err
+		}
+		sum, _, err := hashFile(path)
+		if err != nil {
+			return err
+		}
+		out[filepath.ToSlash(rel)] = sum
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return map[string]string{}, nil
+	}
+	return out, err
+}
+
+// knownHashes returns the target hashes for incremental diffing. Local delivery
+// reads the target directory; pull delivery asks the control plane for the last
+// completed release (the protected host is not reachable from the publisher).
+func (p *Publisher) knownHashes(ctx context.Context, req store.PublishRequest) (map[string]string, error) {
+	if req.Delivery != store.DeliveryPull {
+		return hashTree(req.TargetDir)
+	}
+	_, files, err := p.client.CurrentRelease(ctx, req.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(files))
+	for _, f := range files {
+		out[f.Path] = f.SHA256
+	}
+	return out, nil
+}
+
+// verifyWritten re-hashes every written file and compares it with the manifest.
+func (p *Publisher) verifyWritten(req store.PublishRequest, man *Manifest) error {
+	root, err := filepath.Abs(req.TargetDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range man.Entries {
+		dst := filepath.Join(root, filepath.FromSlash(e.Rel))
+		got, _, err := hashFile(dst)
+		if err != nil {
+			return fmt.Errorf("publish: verify %s: %w", dst, err)
+		}
+		if subtle.ConstantTimeCompare([]byte(got), []byte(e.SHA256)) != 1 {
+			return fmt.Errorf("publish: verification failed for %s (want %s, got %s)", dst, e.SHA256, got)
+		}
+	}
+	return nil
+}
+
+// SyncOptions describes a publisher-triggered release.
+type SyncOptions struct {
+	NodeID    string
+	SourceDir string
+	TargetDir string
+	Note      string
+	Mode      string
+	Delivery  string
+}
+
+// TriggerSync creates a release from the publisher host and waits for its
+// completion (manual trigger, no console request needed).
+func (p *Publisher) TriggerSync(ctx context.Context, opts SyncOptions, timeout time.Duration) error {
+	req, err := p.client.PublishSync(ctx, opts.NodeID, opts.SourceDir, opts.TargetDir, opts.Note, opts.Mode, opts.Delivery)
+	if err != nil {
+		return err
+	}
+	p.log.Info("manual sync created", "request", req.ID, "node", req.NodeID,
+		"mode", req.Mode, "delivery", req.Delivery)
+	deadline := time.Now().Add(timeout)
+	for {
+		p.ProcessOnce(ctx)
+		cur, err := p.client.GetPublishRequest(ctx, req.ID)
+		if err != nil {
+			return err
+		}
+		switch cur.Status {
+		case store.PublishDone:
+			p.log.Info("manual sync completed", "request", req.ID)
+			return nil
+		case store.PublishFailed:
+			return fmt.Errorf("publish: request %s failed: %s", req.ID, cur.Error)
+		case store.PublishCancelled:
+			return fmt.Errorf("publish: request %s was cancelled", req.ID)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("publish: request %s did not finish in %s", req.ID, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// ProcessOnce runs one poll cycle; used by TriggerSync.
+func (p *Publisher) ProcessOnce(ctx context.Context) { p.poll(ctx) }
+
 // Run polls for release requests until ctx is cancelled.
 func (p *Publisher) Run(ctx context.Context) error {
 	p.log.Info("publish agent starting", "agent", p.state.AgentID, "poll", p.interval)
@@ -200,11 +338,25 @@ func (p *Publisher) handle(ctx context.Context, req store.PublishRequest) error 
 	if req.SourceDir == "" || req.TargetDir == "" {
 		return errors.New("publish: request is missing source_dir or target_dir")
 	}
-	man, err := BuildManifest(req.SourceDir)
+	full, err := BuildManifest(req.SourceDir)
 	if err != nil {
 		return err
 	}
-	p.log.Info("manifest built", "request", req.ID, "files", len(man.Entries), "digest", man.Digest)
+	man := full
+	skipped := 0
+	if req.Mode == store.ModeIncremental {
+		if known, kerr := p.knownHashes(ctx, req); kerr != nil {
+			p.log.Warn("incremental baseline unavailable; falling back to full", "request", req.ID, "err", kerr)
+		} else {
+			man, skipped = changedOnly(full, known)
+		}
+		if len(man.Entries) == 0 {
+			p.log.Info("incremental: nothing to publish", "request", req.ID, "unchanged", skipped)
+			return p.client.CompleteRequest(ctx, req.ID, true, "")
+		}
+	}
+	p.log.Info("manifest built", "request", req.ID, "files", len(man.Entries),
+		"skipped", skipped, "digest", man.Digest)
 
 	if req.Delivery == store.DeliveryPull {
 		return p.publishPull(ctx, req, man)
@@ -240,7 +392,11 @@ func (p *Publisher) handle(ctx context.Context, req store.PublishRequest) error 
 	if err != nil {
 		return err
 	}
-	p.log.Info("release written", "request", req.ID, "files", written, "token", claims.TokenID)
+	if err := p.verifyWritten(req, man); err != nil {
+		return err
+	}
+	p.log.Info("release written and hash-verified", "request", req.ID, "files", written,
+		"skipped", skipped, "token", claims.TokenID)
 	if p.verity {
 		p.enableVerity(req, man)
 	}

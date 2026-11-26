@@ -264,6 +264,7 @@ func (s *Server) handleCreatePublish(w http.ResponseWriter, r *http.Request) {
 		TargetDir   string `json:"target_dir"`
 		Note        string `json:"note"`
 		Delivery    string `json:"delivery"`
+		Mode        string `json:"mode"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -277,6 +278,13 @@ func (s *Server) handleCreatePublish(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Delivery != store.DeliveryLocal && in.Delivery != store.DeliveryPull {
 		writeErr(w, http.StatusBadRequest, "invalid", "delivery must be local or pull")
+		return
+	}
+	if in.Mode == "" {
+		in.Mode = store.ModeFull
+	}
+	if in.Mode != store.ModeFull && in.Mode != store.ModeIncremental {
+		writeErr(w, http.StatusBadRequest, "invalid", "mode must be full or incremental")
 		return
 	}
 	node, err := s.st.GetNode(in.NodeID)
@@ -301,6 +309,7 @@ func (s *Server) handleCreatePublish(w http.ResponseWriter, r *http.Request) {
 		TargetDir:   in.TargetDir,
 		Note:        in.Note,
 		Delivery:    in.Delivery,
+		Mode:        in.Mode,
 		CreatedBy:   user,
 	})
 	if err != nil {

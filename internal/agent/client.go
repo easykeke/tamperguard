@@ -450,6 +450,47 @@ func (c *Client) UploadArtifact(ctx context.Context, requestID, relPath, sha256H
 	return nil
 }
 
+// PublishSync creates a release request from the publisher itself (manual
+// trigger), instead of an administrator creating one in the console.
+func (c *Client) PublishSync(ctx context.Context, nodeID, sourceDir, targetDir, note, mode, delivery string) (*store.PublishRequest, error) {
+	var out store.PublishRequest
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/publish/sync", map[string]string{
+		"node_id":    nodeID,
+		"source_dir": sourceDir,
+		"target_dir": targetDir,
+		"note":       note,
+		"mode":       mode,
+		"delivery":   delivery,
+	}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CurrentRelease returns the files of the last completed release for a node, so
+// an incremental publisher can skip unchanged files without target access.
+func (c *Client) CurrentRelease(ctx context.Context, nodeID string) (mode string, files []FileEntry, err error) {
+	q := url.Values{}
+	q.Set("node_id", nodeID)
+	var out struct {
+		Mode  string      `json:"mode"`
+		Files []FileEntry `json:"files"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/publish/current?"+q.Encode(), nil, &out); err != nil {
+		return "", nil, err
+	}
+	return out.Mode, out.Files, nil
+}
+
+// GetPublishRequest returns one request to its publisher.
+func (c *Client) GetPublishRequest(ctx context.Context, id string) (*store.PublishRequest, error) {
+	var out store.PublishRequest
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/publish/"+id, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ---------- self upgrade ----------
 
 // UpgradeInfo is the control plane's answer to an upgrade check.
