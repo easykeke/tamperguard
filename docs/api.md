@@ -26,7 +26,7 @@ Two independent authentication schemes share one listener:
   "policy_id": "pol_1", "policy_version": 3, "policy_digest": "ab12...",
   "degraded": false, "degraded_approved": false,
   "caps": {"bpf_lsm": true, "fanotify": true, "btf": true, "kernel_release": "6.8.0"},
-  "agent_version": "0.2.1", "last_seen": 1732000000, "enrolled_at": 1731000000
+  "agent_version": "0.2.2", "last_seen": 1732000000, "enrolled_at": 1731000000
 }
 ```
 
@@ -60,7 +60,7 @@ Two independent authentication schemes share one listener:
 
 | Method | Path | Body / Query | Notes |
 |---|---|---|---|
-| GET | `/healthz` | — | `{"status":"ok","version":"0.2.1"}` |
+| GET | `/healthz` | — | `{"status":"ok","version":"0.2.2"}` |
 | POST | `/auth/login` | `{"username","password"}` | Sets cookie, returns `{"username","role"}` |
 | POST | `/auth/logout` | — | Clears cookie |
 | GET | `/auth/me` | — | 200 with user, 401 if absent |
