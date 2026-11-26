@@ -3,6 +3,9 @@
 #   cd E:\AI-learn\Tamper-proof\.test-win
 #   Set-ExecutionPolicy -Scope Process Bypass -Force
 #   .\run-test.ps1
+#
+# The test program writes its own log (results.log) line by line, so the output
+# survives a hung or closed console. A watchdog dumps goroutines after 120s.
 $ErrorActionPreference = 'Stop'
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -20,12 +23,11 @@ if (-not (Test-Path $exe)) {
     exit 2
 }
 
-"=== tg-winacl-test $(Get-Date -Format s) ===" | Set-Content -Encoding UTF8 $log
-"user=$($identity.Name) elevated=True" | Add-Content -Encoding UTF8 $log
-Write-Host "running $exe" -ForegroundColor Cyan
-& $exe --dir (Join-Path $dir 'sandbox') 2>&1 | Tee-Object -FilePath $log -Append
+"=== run-test $(Get-Date -Format s) user=$($identity.Name) elevated=True ===" | Set-Content -Encoding UTF8 $log
+Write-Host "running $exe (log: $log)" -ForegroundColor Cyan
+& $exe --dir (Join-Path $dir 'sandbox') --log $log
 $code = $LASTEXITCODE
 "exit=$code" | Add-Content -Encoding UTF8 $log
 Write-Host ""
-Write-Host "log: $log"
+Write-Host "exit=$code  log=$log"
 exit $code

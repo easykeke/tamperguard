@@ -116,7 +116,8 @@ func setIntegrity(path string, level integrityLevel, inherit bool) error {
 		mandatoryLabelNoWriteUp, uintptr(unsafe.Pointer(sid))); r == 0 {
 		return fmt.Errorf("AddMandatoryAce: %w", callErr)
 	}
-	info := windows.SECURITY_INFORMATION(windows.SACL_SECURITY_INFORMATION)
+	info := windows.SECURITY_INFORMATION(windows.SACL_SECURITY_INFORMATION |
+		windows.PROTECTED_SACL_SECURITY_INFORMATION)
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, info, nil, nil, nil, acl)
 }
 

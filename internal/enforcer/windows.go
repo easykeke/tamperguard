@@ -237,14 +237,19 @@ func (w *WindowsACL) buildEntries(rt Runtime, normPath string, isDir bool, now i
 	}
 	entries := []windows.EXPLICIT_ACCESS{
 		makeEntry(windows.GENERIC_ALL, inherit, mustWellKnown(windows.WinLocalSystemSid)),
-		makeEntry(windows.GENERIC_READ|windows.GENERIC_EXECUTE, inherit, mustWellKnown(windows.WinWorldSid)),
 	}
+	// Strict mode: administrators keep only the rights needed to maintain the
+	// security descriptor (and to let the agent, which may run as an elevated
+	// administrator rather than SYSTEM, re-apply the lockdown). They cannot
+	// write file data, and MIC still blocks them at the System integrity label.
+	adminMask := windows.ACCESS_MASK(windows.READ_CONTROL | windows.WRITE_DAC | windows.WRITE_OWNER)
 	if w.allowAdmins {
-		// Compatibility mode: administrators keep write access (and can undo the
-		// lockdown trivially), which is why it is opt-in only.
-		entries = append(entries, makeEntry(windows.GENERIC_ALL, inherit,
-			mustWellKnown(windows.WinBuiltinAdministratorsSid)))
+		adminMask = windows.GENERIC_ALL
 	}
+	entries = append(entries, makeEntry(adminMask, inherit,
+		mustWellKnown(windows.WinBuiltinAdministratorsSid)))
+	entries = append(entries, makeEntry(windows.GENERIC_READ|windows.GENERIC_EXECUTE, inherit,
+		mustWellKnown(windows.WinWorldSid)))
 	if w.grantCovers(rt, normPath, now) {
 		for _, sid := range w.sids {
 			entries = append(entries, makeEntry(
