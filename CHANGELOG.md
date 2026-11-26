@@ -38,6 +38,8 @@
 
 - **Agent 防停止/防卸载加固**：Windows 安装脚本新增 `TamperGuardWatchdog` 看护服务，服务 ACL 去掉 Administrators 的停止/删除/改配置权限，看护每 3 秒拉起被停服务并重刷 ACL；发布端也注册为受保护服务；卸载改由 SYSTEM 计划任务执行（管理员 ACL 已禁止直接 sc stop/delete）。Linux systemd 单元加 `RefuseManualStop=yes`，卸载改用 disable + kill。
 
+- **Windows 托盘界面**：新增 `tg-agent-tray.ps1`，安装脚本自动创建开机启动快捷方式；托盘读取服务写入的 `TamperGuardStatus\status.json`（在线/执行层/降级/策略摘要/管理端地址），提供打开管理端、查看状态、退出托盘。托盘仅显示，不参与防护，退出不影响服务。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。

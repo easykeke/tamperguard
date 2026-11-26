@@ -1812,11 +1812,13 @@ function nodesView(options) {
       const downloads = [['linux', 'amd64', '下载 Linux 版'], ['windows', 'amd64', '下载 Windows 版']];
       if (role === 'protect') {
         downloads.push(['script', '', 'Windows 安装脚本']);
+        downloads.push(['tray', '', '托盘界面脚本']);
       }
       downloads.forEach(function (item) {
-        if (item[0] === 'script') {
+        if (item[0] === 'script' || item[0] === 'tray') {
           const script = el('a', 'btn btn--sm', item[2]);
-          script.href = '/api/v1/downloads/agent?file=install-service.ps1';
+          script.href = '/api/v1/downloads/agent?file=' +
+            (item[0] === 'tray' ? 'tg-agent-tray.ps1' : 'install-service.ps1');
           script.setAttribute('download', '');
           actions.appendChild(script);
           return;

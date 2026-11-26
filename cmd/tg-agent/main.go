@@ -74,6 +74,13 @@ func main() {
 	}
 }
 
+func defaultStatusDir() string {
+	if runtime.GOOS == "windows" {
+		return `C:\ProgramData\TamperGuardStatus`
+	}
+	return ""
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `TamperGuard protection agent
 
@@ -423,6 +430,7 @@ func cmdRun(args []string) error {
 	verity := fs.Bool("verity", false, "enable fs-verity on files installed by pull deliveries (read-only + verified reads)")
 	tpmAK := fs.String("tpm-ak-ctx", "", "TPM attestation key context for quote (empty disables TPM attestation)")
 	tpmTCTI := fs.String("tpm-tcti", "", "TPM2 TCTI, e.g. device:/dev/tpmrm0 or swtpm:host=127.0.0.1,port=2321")
+	statusDir := fs.String("status-dir", defaultStatusDir(), "directory for the tray status snapshot (empty disables)")
 	_ = fs.Parse(args)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -456,6 +464,7 @@ func cmdRun(args []string) error {
 	a, err := agent.New(state, enf, agent.Options{
 		TPMQuoteAK:      *tpmAK,
 		TPMQuoteTCTI:    *tpmTCTI,
+		StatusDir:       *statusDir,
 		Logger:          logger,
 		AutoUpgrade:     *autoUpgrade,
 		UpgradeInterval: *upgradeInterval,

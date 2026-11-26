@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Installs TamperGuard agents as hardened Windows services (no kernel driver).
@@ -58,7 +58,9 @@ function Install-Service([string]$name, [string]$display, [string]$binPath) {
 }
 
 # 1. Protection agent service.
-Install-Service $AgentSvc 'TamperGuard Protection Agent' "`"$agentExe`" run --state-dir `"$StateDir`""
+$StatusDir = 'C:\ProgramData\TamperGuardStatus'
+New-Item -ItemType Directory -Force -Path $StatusDir | Out-Null
+Install-Service $AgentSvc 'TamperGuard Protection Agent' "`"$agentExe`" run --state-dir `"$StateDir`" --status-dir `"$StatusDir`""
 
 # 2. Publisher service when the binary is present.
 $services = @($AgentSvc)
@@ -72,14 +74,33 @@ $watchBin = "`"$agentExe`" watchdog --service $($services -join ',') --agent-dir
 Install-Service $Watchdog 'TamperGuard Watchdog' $watchBin
 
 # 4. Protect program and state directories: SYSTEM full, admins read-only.
-foreach ($dir in @($AgentDir, $StateDir, $PublishDir)) {
+icacls $AgentDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" "Users:(OI)(CI)RX" /T /C | Out-Null
+foreach ($dir in @($StateDir, $PublishDir)) {
     icacls $dir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" /T /C | Out-Null
 }
+icacls $StatusDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" "Users:(OI)(CI)RX" /T /C | Out-Null
 
 foreach ($svc in $services) {
     Start-Service $svc
 }
 Start-Service $Watchdog
+
+# 5. Tray UI (user session): copy the script and start it at logon for all users.
+$traySrc = Join-Path $PSScriptRoot 'tg-agent-tray.ps1'
+$trayDst = Join-Path $AgentDir 'tg-agent-tray.ps1'
+if (Test-Path $traySrc) {
+    Copy-Item $traySrc $trayDst -Force
+    $startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\TamperGuardTray.lnk'
+    $ws = New-Object -ComObject WScript.Shell
+    $shortcut = $ws.CreateShortcut($startup)
+    $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$trayDst`""
+    $shortcut.WorkingDirectory = $AgentDir
+    $shortcut.Description = 'TamperGuard tray UI'
+    $shortcut.Save()
+    Start-Process -WindowStyle Hidden -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$trayDst`""
+    Write-Host "tray UI installed and started (status: $StatusDir)" -ForegroundColor Green
+}
 
 Write-Host "installed services: $($services -join ', ') + $Watchdog" -ForegroundColor Green
 Write-Host "  binary : $agentExe"

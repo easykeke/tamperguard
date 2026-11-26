@@ -39,6 +39,8 @@ type Options struct {
 	RASPSocket string
 	// TPMQuoteAK is the path to a TSS2 key context for TPM quote (empty disables).
 	TPMQuoteAK string
+	// StatusDir, when set, receives status.json for the tray UI.
+	StatusDir string
 	// TPMQuoteTCTI is the TPM2 TCTI string, e.g. "device:/dev/tpmrm0" or
 	// "swtpm:host=127.0.0.1,port=2321".
 	TPMQuoteTCTI string
@@ -380,6 +382,7 @@ func (a *Agent) tick(ctx context.Context) {
 	if err := a.flush(ctx); err != nil {
 		a.log.Warn("audit upload failed", "err", err)
 	}
+	a.writeTrayStatus()
 }
 
 func (a *Agent) sync(ctx context.Context) error {
