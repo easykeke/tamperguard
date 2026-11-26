@@ -183,6 +183,16 @@ func main() {
 	logf("publisher account: %s", publisher)
 	logf("requested integrity level: %s (token: %s)", level, tokenLevel())
 
+	// MIC diagnostics: privilege state, label write, read-back and raw SACL.
+	for _, lvl := range []string{"high", "system"} {
+		diagPath := filepath.Join(root, "mic-diag-"+lvl+".txt")
+		if err := os.WriteFile(diagPath, []byte("diag"), 0o644); err != nil {
+			logf("  [mic-diag] %s: cannot create file: %v", lvl, err)
+			continue
+		}
+		logf("  [mic-diag] %s: %s", lvl, enforcer.DebugIntegrity(diagPath, lvl))
+	}
+
 	eng, err := enforcer.SelectKind("windows-acl", enforcer.Options{
 		PublisherSIDs:  []string{publisher},
 		StateDir:       stateDir,
