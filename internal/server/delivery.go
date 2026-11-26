@@ -223,8 +223,10 @@ func (s *Server) handleDeliveryComplete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var in struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
+		OK            bool   `json:"ok"`
+		Error         string `json:"error"`
+		VerifyDigest  string `json:"verify_digest"`
+		VerifiedFiles int    `json:"verified_files"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -232,6 +234,9 @@ func (s *Server) handleDeliveryComplete(w http.ResponseWriter, r *http.Request) 
 	status := store.PublishDone
 	if !in.OK {
 		status = store.PublishFailed
+	}
+	if in.VerifyDigest != "" {
+		_ = s.st.SetPublishVerification(id, in.VerifyDigest, in.VerifiedFiles)
 	}
 	if err := s.st.UpdatePublishRequest(id, status, req.Manifest, req.TokenID, in.Error); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())

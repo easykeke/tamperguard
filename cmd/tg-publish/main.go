@@ -59,7 +59,7 @@ func usage() {
 // each selected task; paths come from the console unless overridden.
 func cmdSync(args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
-	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
+	stateDir := fs.String("state-dir", config.DefaultPublishDir, "state directory")
 	profileID := fs.String("profile", "", "run one console sync profile by id")
 	allFlag := fs.Bool("all", false, "run every console sync profile")
 	nodeID := fs.String("node", "", "override target protect node id")
@@ -246,9 +246,16 @@ func cmdSync(args []string) error {
 	for _, task := range tasks {
 		fmt.Printf("同步：%s → %s（节点 %s，%s，%s）\n",
 			task.SourceDir, task.TargetDir, task.NodeID, modeLabel(task.Mode), deliveryLabel(task.Delivery))
-		if err := p.TriggerSync(ctx, task, *timeout); err != nil {
+		req, err := p.TriggerSync(ctx, task, *timeout)
+		if err != nil {
 			failures++
 			fmt.Fprintf(os.Stderr, "任务失败：%v\n", err)
+			continue
+		}
+		if req.VerifiedFiles == 0 {
+			fmt.Printf("✓ 校验通过：目标端无变更文件，摘要一致（%s…）\n", shortDigest(req.VerifyDigest))
+		} else {
+			fmt.Printf("✓ 校验通过：目标端回读 %d 个文件，哈希一致（%s…）\n", req.VerifiedFiles, shortDigest(req.VerifyDigest))
 		}
 	}
 	if failures > 0 {
@@ -280,6 +287,13 @@ func splitSyncArgs(args []string) (flags, positional []string) {
 		}
 	}
 	return flags, positional
+}
+
+func shortDigest(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
 }
 
 func pick(v, fallback string) string {
@@ -419,7 +433,7 @@ func runWizard(p *publish.Publisher, cfg *publish.SyncOptions) error {
 
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
+	stateDir := fs.String("state-dir", config.DefaultPublishDir, "state directory")
 	verity := fs.Bool("verity", false, "enable fs-verity on the files of every locally installed release")
 	_ = fs.Parse(args)
 

@@ -116,12 +116,16 @@ type PublishRequest struct {
 	Mode         string `json:"mode"`
 	ProfileID    string `json:"profile_id"`
 	SkippedFiles int    `json:"skipped_files"`
-	Manifest     string `json:"manifest"`
-	TokenID      string `json:"token_id"`
-	Error        string `json:"error"`
-	CreatedBy    string `json:"created_by"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
+	// Verification reported by the side that installed the files.
+	VerifyDigest  string `json:"verify_digest"`
+	VerifiedFiles int    `json:"verified_files"`
+	VerifyAt      int64  `json:"verify_at"`
+	Manifest      string `json:"manifest"`
+	TokenID       string `json:"token_id"`
+	Error         string `json:"error"`
+	CreatedBy     string `json:"created_by"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 // PublishFile is one entry of a release manifest stored by the control plane.
@@ -397,6 +401,9 @@ func (s *Store) migrate() error {
 		`ALTER TABLE publish_requests ADD COLUMN delivery TEXT NOT NULL DEFAULT 'local'`,
 		`ALTER TABLE publish_requests ADD COLUMN mode TEXT NOT NULL DEFAULT 'full'`,
 		`ALTER TABLE publish_requests ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE publish_requests ADD COLUMN verify_digest TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE publish_requests ADD COLUMN verified_files INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE publish_requests ADD COLUMN verify_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sync_profiles ADD COLUMN last_run_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE sync_profiles ADD COLUMN last_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE publish_requests ADD COLUMN skipped_files INTEGER NOT NULL DEFAULT 0`,
@@ -721,19 +728,21 @@ func (s *Store) CreatePublishRequest(r PublishRequest) (PublishRequest, error) {
 	r.CreatedAt = now()
 	r.UpdatedAt = r.CreatedAt
 	_, err := s.db.Exec(`INSERT INTO publish_requests
-		(id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, profile_id, skipped_files, created_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, profile_id, skipped_files, verify_digest, verified_files, verify_at, created_by, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.NodeID, r.PublisherID, r.SourceDir, r.TargetDir, r.Note, r.Status, r.Delivery,
-		r.Mode, r.ProfileID, r.SkippedFiles, r.CreatedBy, r.CreatedAt, r.UpdatedAt)
+		r.Mode, r.ProfileID, r.SkippedFiles, r.VerifyDigest, r.VerifiedFiles, r.VerifyAt,
+		r.CreatedBy, r.CreatedAt, r.UpdatedAt)
 	return r, err
 }
 
-const publishCols = `id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, profile_id, skipped_files, manifest, token_id, error, created_by, created_at, updated_at`
+const publishCols = `id, node_id, publisher_id, source_dir, target_dir, note, status, delivery, mode, profile_id, skipped_files, verify_digest, verified_files, verify_at, manifest, token_id, error, created_by, created_at, updated_at`
 
 func scanPublish(sc interface{ Scan(...any) error }) (PublishRequest, error) {
 	var r PublishRequest
 	err := sc.Scan(&r.ID, &r.NodeID, &r.PublisherID, &r.SourceDir, &r.TargetDir, &r.Note, &r.Status,
-		&r.Delivery, &r.Mode, &r.ProfileID, &r.SkippedFiles, &r.Manifest, &r.TokenID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
+		&r.Delivery, &r.Mode, &r.ProfileID, &r.SkippedFiles, &r.VerifyDigest, &r.VerifiedFiles, &r.VerifyAt,
+		&r.Manifest, &r.TokenID, &r.Error, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -908,6 +917,13 @@ func (s *Store) ClaimPublishDelivery(id, nodeID string) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// SetPublishVerification stores the digest the installing side read back.
+func (s *Store) SetPublishVerification(id, digest string, files int) error {
+	_, err := s.db.Exec(`UPDATE publish_requests SET verify_digest=?, verified_files=?, verify_at=? WHERE id=?`,
+		digest, files, now(), id)
+	return err
 }
 
 // LatestCompletedReleaseForNode returns the newest completed release for a node

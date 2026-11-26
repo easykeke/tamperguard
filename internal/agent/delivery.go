@@ -47,20 +47,20 @@ func (a *Agent) deliverOne(ctx context.Context, req store.PublishRequest) {
 		return
 	}
 	if err := verifyManifestDigest(info.Manifest, info.Files); err != nil {
-		_ = a.client.CompleteDelivery(ctx, req.ID, false, err.Error())
+		_ = a.client.CompleteDelivery(ctx, req.ID, false, err.Error(), "", 0)
 		a.record(audit.KindPublishFailed, "", "pull delivery rejected: "+err.Error())
 		return
 	}
 	root, err := filepath.Abs(info.TargetDir)
 	if err != nil {
-		_ = a.client.CompleteDelivery(ctx, req.ID, false, err.Error())
+		_ = a.client.CompleteDelivery(ctx, req.ID, false, err.Error(), "", 0)
 		return
 	}
 	written := 0
 	for _, f := range info.Files {
 		if err := a.writeDeliveredFile(ctx, req.ID, f, root); err != nil {
 			a.log.Error("pull delivery failed", "request", req.ID, "file", f.Path, "err", err)
-			_ = a.client.CompleteDelivery(ctx, req.ID, false, err.Error())
+			_ = a.client.CompleteDelivery(ctx, req.ID, false, err.Error(), "", 0)
 			a.record(audit.KindPublishFailed, f.Path, "pull delivery failed: "+err.Error())
 			return
 		}
@@ -69,9 +69,17 @@ func (a *Agent) deliverOne(ctx context.Context, req store.PublishRequest) {
 	if a.opts.Verity {
 		a.enableVerity(root, info.Files)
 	}
-	_ = a.client.CompleteDelivery(ctx, req.ID, true, "")
-	a.record(audit.KindPublishDone, "", fmt.Sprintf("pull delivery %s: %d files", req.ID, written))
-	a.log.Info("pull delivery installed", "request", req.ID, "files", written)
+	verifyDigest, verified, verr := verifyInstalled(root, info.Files)
+	if verr != nil {
+		_ = a.client.CompleteDelivery(ctx, req.ID, false, "verification: "+verr.Error(), "", 0)
+		a.record(audit.KindPublishFailed, "", "pull delivery verification failed: "+verr.Error())
+		a.log.Error("pull delivery verification failed", "request", req.ID, "err", verr)
+		return
+	}
+	_ = a.client.CompleteDelivery(ctx, req.ID, true, "", verifyDigest, verified)
+	a.record(audit.KindPublishDone, "", fmt.Sprintf("pull delivery %s: %d files verified", req.ID, verified))
+	a.log.Info("pull delivery installed and verified", "request", req.ID, "files", verified,
+		"digest", verifyDigest)
 }
 
 // enableVerity hardens the files just delivered: fs-verity makes them read-only

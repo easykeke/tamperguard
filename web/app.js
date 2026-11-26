@@ -3252,6 +3252,15 @@ function publishView() {
     tr.appendChild(cellNode(badge(deliveryPull ? '跨机拉取' : '本机写入', deliveryPull ? 'info' : 'muted')));
     const incr = String(req.mode || 'full') === 'incremental';
     tr.appendChild(cellNode(badge(incr ? '增量' : '全量', incr ? 'ok' : 'muted')));
+    const verifyTd = el('td');
+    if (req.verify_digest && req.verify_digest === req.manifest) {
+      verifyTd.appendChild(badge('通过 ' + (req.verified_files || 0), 'ok'));
+    } else if (req.verify_digest) {
+      verifyTd.appendChild(badge('不一致', 'danger'));
+    } else {
+      verifyTd.appendChild(el('span', 'muted', '—'));
+    }
+    tr.appendChild(verifyTd);
     tr.appendChild(cell(textOr(req.source_dir), 'mono cell-ellipsis', textOr(req.source_dir)));
 
     const statusMeta = PUBLISH_STATUS_META[req.status] || { label: textOr(req.status), tone: 'muted' };
@@ -3294,6 +3303,7 @@ function publishView() {
       { label: '发布端' },
       { label: '方式' },
       { label: '模式' },
+      { label: '校验' },
       { label: '源目录' },
       { label: '状态' },
       { label: '备注' },

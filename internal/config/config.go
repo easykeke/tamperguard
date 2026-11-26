@@ -19,7 +19,10 @@ import (
 
 // Default locations. These are also what the docs promise.
 const (
-	DefaultDataDir    = "/var/lib/tamperguard"
+	DefaultDataDir = "/var/lib/tamperguard"
+	// DefaultPublishDir is where a publish agent keeps its identity by default;
+	// keeping it separate means `tg-publish sync` works without --state-dir.
+	DefaultPublishDir = "/var/lib/tamperguard-publish"
 	DefaultListenAddr = ":8443"
 
 	// File names inside the data dir.

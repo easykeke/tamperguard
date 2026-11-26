@@ -274,9 +274,9 @@ func (c *Client) SubmitManifest(ctx context.Context, id, manifest string, files 
 }
 
 // CompleteRequest closes a publish request.
-func (c *Client) CompleteRequest(ctx context.Context, id string, ok bool, errMsg string) error {
+func (c *Client) CompleteRequest(ctx context.Context, id string, ok bool, errMsg, verifyDigest string, verifiedFiles int) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/publish/"+id+"/complete",
-		map[string]any{"ok": ok, "error": errMsg}, nil)
+		map[string]any{"ok": ok, "error": errMsg, "verify_digest": verifyDigest, "verified_files": verifiedFiles}, nil)
 }
 
 // PublishReady reports whether the target node has installed the grant for
@@ -422,9 +422,9 @@ func (c *Client) DownloadArtifact(ctx context.Context, id, relPath string, w io.
 }
 
 // CompleteDelivery reports the outcome of a pull delivery.
-func (c *Client) CompleteDelivery(ctx context.Context, id string, ok bool, errMsg string) error {
+func (c *Client) CompleteDelivery(ctx context.Context, id string, ok bool, errMsg, verifyDigest string, verifiedFiles int) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/deliveries/"+id+"/complete",
-		map[string]any{"ok": ok, "error": errMsg}, nil)
+		map[string]any{"ok": ok, "error": errMsg, "verify_digest": verifyDigest, "verified_files": verifiedFiles}, nil)
 }
 
 // UploadArtifact stages one file of a pull-mode release on the control plane.

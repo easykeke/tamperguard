@@ -276,7 +276,7 @@ func (p *Publisher) ProtectNodes(ctx context.Context) ([]agent.ProtectNode, erro
 
 // TriggerSync creates a release from the publisher host and waits for its
 // completion (manual trigger, no console request needed).
-func (p *Publisher) TriggerSync(ctx context.Context, opts SyncOptions, timeout time.Duration) error {
+func (p *Publisher) TriggerSync(ctx context.Context, opts SyncOptions, timeout time.Duration) (*store.PublishRequest, error) {
 	var req *store.PublishRequest
 	var err error
 	if opts.ProfileID != "" {
@@ -285,7 +285,7 @@ func (p *Publisher) TriggerSync(ctx context.Context, opts SyncOptions, timeout t
 		req, err = p.client.PublishSync(ctx, opts.NodeID, opts.SourceDir, opts.TargetDir, opts.Note, opts.Mode, opts.Delivery)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	p.log.Info("manual sync created", "request", req.ID, "node", req.NodeID,
 		"mode", req.Mode, "delivery", req.Delivery)
@@ -294,23 +294,31 @@ func (p *Publisher) TriggerSync(ctx context.Context, opts SyncOptions, timeout t
 		p.ProcessOnce(ctx)
 		cur, err := p.client.GetPublishRequest(ctx, req.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		switch cur.Status {
 		case store.PublishDone:
-			p.log.Info("manual sync completed", "request", req.ID)
-			return nil
+			if cur.VerifyDigest == "" {
+				return cur, fmt.Errorf("publish: target did not report verification hashes for %s", req.ID)
+			}
+			if cur.VerifyDigest != cur.Manifest {
+				return cur, fmt.Errorf("publish: target verification mismatch for %s (%s != %s)",
+					req.ID, cur.VerifyDigest, cur.Manifest)
+			}
+			p.log.Info("publisher verified target hashes", "request", req.ID,
+				"files", cur.VerifiedFiles, "digest", cur.VerifyDigest)
+			return cur, nil
 		case store.PublishFailed:
-			return fmt.Errorf("publish: request %s failed: %s", req.ID, cur.Error)
+			return cur, fmt.Errorf("publish: request %s failed: %s", req.ID, cur.Error)
 		case store.PublishCancelled:
-			return fmt.Errorf("publish: request %s was cancelled", req.ID)
+			return cur, fmt.Errorf("publish: request %s was cancelled", req.ID)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("publish: request %s did not finish in %s", req.ID, timeout)
+			return cur, fmt.Errorf("publish: request %s did not finish in %s", req.ID, timeout)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(time.Second):
 		}
 	}
@@ -351,7 +359,7 @@ func (p *Publisher) poll(ctx context.Context) {
 		}
 		if err := p.handle(ctx, req); err != nil {
 			p.log.Error("publish failed", "request", req.ID, "err", err)
-			_ = p.client.CompleteRequest(ctx, req.ID, false, err.Error())
+			_ = p.client.CompleteRequest(ctx, req.ID, false, err.Error(), "", 0)
 		}
 	}
 }
@@ -374,7 +382,7 @@ func (p *Publisher) handle(ctx context.Context, req store.PublishRequest) error 
 		}
 		if len(man.Entries) == 0 {
 			p.log.Info("incremental: nothing to publish", "request", req.ID, "unchanged", skipped)
-			return p.client.CompleteRequest(ctx, req.ID, true, "")
+			return p.client.CompleteRequest(ctx, req.ID, true, "", full.Digest, 0)
 		}
 	}
 	p.log.Info("manifest built", "request", req.ID, "files", len(man.Entries),
@@ -422,7 +430,8 @@ func (p *Publisher) handle(ctx context.Context, req store.PublishRequest) error 
 	if p.verity {
 		p.enableVerity(req, man)
 	}
-	if err := p.client.CompleteRequest(ctx, req.ID, true, ""); err != nil {
+	digest := digestOf(man.Entries)
+	if err := p.client.CompleteRequest(ctx, req.ID, true, "", digest, written); err != nil {
 		return fmt.Errorf("publish: report completion: %w", err)
 	}
 	return nil
