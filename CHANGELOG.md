@@ -36,6 +36,8 @@
 
 - **修复 Windows 安装包无法运行**：下载接口此前要求登录会话，会话失效时返回 52 字节 401 JSON 却被保存为 `tg-agent.exe`；现改为公开只读下载，并明确按 os/arch 返回 PE/ELF。Windows 无参数双击时显示用法并等待回车；新增 `install-service.ps1` 下载入口。
 
+- **Agent 防停止/防卸载加固**：Windows 安装脚本新增 `TamperGuardWatchdog` 看护服务，服务 ACL 去掉 Administrators 的停止/删除/改配置权限，看护每 3 秒拉起被停服务并重刷 ACL；发布端也注册为受保护服务；卸载改由 SYSTEM 计划任务执行（管理员 ACL 已禁止直接 sc stop/delete）。Linux systemd 单元加 `RefuseManualStop=yes`，卸载改用 disable + kill。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。

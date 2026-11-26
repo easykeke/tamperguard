@@ -27,6 +27,7 @@ for cmd in tg-agent tg-publish; do
   GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$winpkg/$cmd.exe" "./cmd/$cmd"
 done
 cp deploy/windows/install-service.ps1 "$winpkg/" 2>/dev/null || true
+cp deploy/windows/verify-hardening.ps1 "$winpkg/" 2>/dev/null || true
 cp deploy/windows/README.md "$winpkg/" 2>/dev/null || true
 cp LICENSE "$winpkg/" 2>/dev/null || true
 if command -v zip >/dev/null; then

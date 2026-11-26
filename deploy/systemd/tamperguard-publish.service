@@ -33,3 +33,4 @@ SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
+RefuseManualStop=yes

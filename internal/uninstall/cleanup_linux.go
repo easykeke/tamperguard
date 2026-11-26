@@ -44,10 +44,14 @@ func Perform(ctx context.Context, opts Options) ([]string, error) {
 		actions = append(actions, fmt.Sprintf("detached %d pinned LSM links", n))
 	}
 	if _, err := os.Stat(unit); err == nil {
-		if out, err := exec.CommandContext(ctx, "systemctl", "disable", "--now", service).CombinedOutput(); err != nil {
-			actions = append(actions, fmt.Sprintf("systemctl disable --now %s: %v (%s)", service, err, string(out)))
+		// RefuseManualStop blocks `systemctl stop`; disable + mask so a killed
+		// process cannot be restarted by Restart=always, then signal it.
+		_ = exec.CommandContext(ctx, "systemctl", "disable", service).Run()
+		_ = exec.CommandContext(ctx, "systemctl", "mask", service).Run()
+		if out, err := exec.CommandContext(ctx, "systemctl", "kill", "--signal=TERM", service).CombinedOutput(); err != nil {
+			actions = append(actions, fmt.Sprintf("systemctl kill %s: %v (%s)", service, err, string(out)))
 		} else {
-			actions = append(actions, "service stopped: "+service)
+			actions = append(actions, "service signalled: "+service)
 		}
 		if err := os.Remove(unit); err == nil {
 			actions = append(actions, "unit removed: "+unit)

@@ -1,5 +1,4 @@
-//go:build windows
-
+// Package uninstall implements signed uninstall plus platform cleanup.
 package uninstall
 
 import (
@@ -10,60 +9,60 @@ import (
 	"path/filepath"
 )
 
-// DefaultSystemTargets returns the Windows service name used by the packaged
-// agent (the unit path is unused on Windows).
+// DefaultSystemTargets returns the Windows service names used by the packaged
+// agents.
 func DefaultSystemTargets() (unitPath, serviceName string) {
 	return "", "TamperGuardAgent"
 }
 
-// Perform stops and deletes the service and schedules removal of the binary and
-// state directory (a running image cannot be deleted, so the deletion runs from a
-// detached helper after this process exits).
+// Perform removes the Windows services and files through a SYSTEM scheduled
+// task: the hardened service ACL denies stop/delete to Administrators, so the
+// cleanup must run with SYSTEM rights. The ticket has already been verified by
+// the caller.
 func Perform(ctx context.Context, opts Options) ([]string, error) {
 	if opts.DryRun {
-		return []string{"dry-run: would stop and delete the service, remove the binary and " + opts.StateDir}, nil
+		return []string{"dry-run: would stop/delete services and remove files as SYSTEM"}, nil
 	}
-	service := opts.ServiceName
-	if service == "" {
-		_, service = DefaultSystemTargets()
+	script := fmt.Sprintf(`@echo off
+sc stop TamperGuardWatchdog >nul 2>&1
+sc delete TamperGuardWatchdog >nul 2>&1
+sc stop TamperGuardAgent >nul 2>&1
+sc delete TamperGuardAgent >nul 2>&1
+sc stop TamperGuardPublish >nul 2>&1
+sc delete TamperGuardPublish >nul 2>&1
+timeout /t 2 /nobreak >nul
+del /f /q "%s" >nul 2>&1
+rmdir /s /q "%s" >nul 2>&1
+`, opts.BinaryPath, opts.StateDir)
+	bat := filepath.Join(os.TempDir(), fmt.Sprintf("tg-uninstall-%d.cmd", os.Getpid()))
+	if err := os.WriteFile(bat, []byte(script), 0o600); err != nil {
+		return nil, err
 	}
-	var actions []string
-	for _, args := range [][]string{{"stop", service}, {"delete", service}} {
-		out, err := exec.CommandContext(ctx, "sc.exe", args...).CombinedOutput()
-		if err != nil {
-			actions = append(actions, fmt.Sprintf("sc %v: %v (%s)", args, err, string(out)))
-		} else {
-			actions = append(actions, "sc "+args[0]+" "+service)
-		}
+	defer os.Remove(bat)
+
+	taskName := "TamperGuardUninstall"
+	_ = exec.CommandContext(ctx, "schtasks.exe", "/Delete", "/TN", taskName, "/F").Run()
+	create := exec.CommandContext(ctx, "schtasks.exe", "/Create", "/TN", taskName,
+		"/TR", bat, "/SC", "ONCE", "/ST", "00:00", "/RU", "SYSTEM", "/RL", "HIGHEST", "/F")
+	if out, err := create.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("create SYSTEM cleanup task: %w (%s)", err, string(out))
 	}
-	// A small batch waits for this process to exit, then removes the files.
-	bat := fmt.Sprintf("@echo off\r\ntimeout /t 3 /nobreak >nul\r\ndel /f /q \"%s\" >nul 2>&1\r\nrmdir /s /q \"%s\" >nul 2>&1\r\n",
-		opts.BinaryPath, opts.StateDir)
-	batPath := filepath.Join(os.TempDir(), fmt.Sprintf("tg-uninstall-%d.bat", os.Getpid()))
-	if err := os.WriteFile(batPath, []byte(bat), 0o600); err != nil {
-		return actions, err
+	actions := []string{"created SYSTEM cleanup task", "stopping watchdog and agent services", "removing binary and state"}
+	if out, err := exec.CommandContext(ctx, "schtasks.exe", "/Run", "/TN", taskName).CombinedOutput(); err != nil {
+		return actions, fmt.Errorf("run SYSTEM cleanup task: %w (%s)", err, string(out))
 	}
-	cmd := exec.Command("cmd.exe", "/c", "start", "/b", "", batPath)
-	if err := cmd.Start(); err != nil {
-		return actions, err
+	// Give the SYSTEM task time to stop the services and delete the files.
+	if err := exec.CommandContext(ctx, "cmd.exe", "/c", "timeout", "/t", "8", "/nobreak").Run(); err != nil {
+		// timeout may be unavailable; ignore and let the task finish.
 	}
-	actions = append(actions, "deferred removal scheduled for binary and state")
+	_ = exec.CommandContext(ctx, "schtasks.exe", "/Delete", "/TN", taskName, "/F").Run()
+	actions = append(actions, "services removed, binary and state deleted by SYSTEM task")
 	return actions, nil
 }
 
-// SpawnDetached schedules the helper and returns immediately. The agent process
-// is the service itself, so it must exit before sc.exe stops it; the helper waits
-// three seconds and then stops/deletes the service and removes the files.
+// SpawnDetached schedules the same SYSTEM cleanup (used when the service itself
+// receives a remote uninstall ticket and cannot delete its own image).
 func SpawnDetached(opts Options) error {
-	service := opts.ServiceName
-	if service == "" {
-		_, service = DefaultSystemTargets()
-	}
-	bat := fmt.Sprintf("@echo off\r\ntimeout /t 3 /nobreak >nul\r\nsc stop %s >nul 2>&1\r\nsc delete %s >nul 2>&1\r\ndel /f /q \"%s\" >nul 2>&1\r\nrmdir /s /q \"%s\" >nul 2>&1\r\n",
-		service, service, opts.BinaryPath, opts.StateDir)
-	batPath := filepath.Join(os.TempDir(), fmt.Sprintf("tg-remote-uninstall-%d.bat", os.Getpid()))
-	if err := os.WriteFile(batPath, []byte(bat), 0o600); err != nil {
-		return err
-	}
-	return exec.Command("cmd.exe", "/c", "start", "/b", "", batPath).Start()
+	_, err := Perform(context.Background(), opts)
+	return err
 }

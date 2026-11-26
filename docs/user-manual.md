@@ -471,29 +471,59 @@ sudo tg-agent verity enable|digest|check /var/www/site/index.html
 
 需要内核 `CONFIG_FS_VERITY` 且文件系统带 `verity` 特性；启用后文件只读、读取校验。
 
-### 9.5 Windows 严格模式
+### 9.5 Windows 严格模式与防停止
 
-安装（管理员 PowerShell）：
+安装（管理员 PowerShell，二进制放在 `C:\Program Files\TamperGuard`）：
 
 ```powershell
-# 1. 安装加固服务（LocalSystem、失败自动重启、服务 ACL 只允许 SYSTEM 停止）
 .\deploy\windows\install-service.ps1
+```
 
-# 2. 注册
+脚本会创建并加固三个 LocalSystem 服务：
+
+| 服务 | 作用 |
+|---|---|
+| `TamperGuardAgent` | 被防护端 |
+| `TamperGuardPublish` | 发布端（同目录存在 tg-publish.exe 时自动安装） |
+| `TamperGuardWatchdog` | 看护：每 3 秒检查服务，停了就拉起，并重刷服务/目录 ACL |
+
+加固点：
+
+- 服务 ACL 只给 Administrators 查询/启动权限，**没有停止（WP）、删除（SD）、改配置（DC）**：`sc stop`、`sc delete`、`net stop` 返回拒绝；
+- 程序目录与状态目录：SYSTEM 完全控制、Administrators 只读；
+- 看护服务本身也是同样的 ACL；
+- 管理员 `taskkill` 杀掉进程后，看护会在数秒内重新拉起；
+- 卸载 `tg-agent uninstall` 验签后由 **SYSTEM 计划任务**执行停止/删除（管理员没有直接 stop/delete 权限）。
+
+安装后自检：
+
+```powershell
+.\deploy\windows\verify-hardening.ps1
+# [PASS] service stop denied
+# [PASS] watchdog restarted agent
+# [PASS] service delete denied
+```
+
+注册（安装后执行一次）：
+
+```powershell
 & 'C:\Program Files\TamperGuard\tg-agent.exe' enroll `
-  --server https://<控制面IP>:8443 --bootstrap '<protect token>' `
+  --server https://<控制面IP>:8443 --bootstrap '<token>' `
   --ca C:\ca.crt --state-dir 'C:\ProgramData\TamperGuard' `
   --role protect --publisher-sids 'CONTOSO\svc-publisher'
-
-# 3. 启动
 Start-Service TamperGuardAgent
 ```
 
+发布端注册：`--role publish --state-dir 'C:\ProgramData\TamperGuard-publish'`，服务 `TamperGuardPublish` 会自动运行。
+
+其他：
+
 - 默认严格模式：DACL 不给 Administrators 写权限 + Self-heal 基线 +（宿主支持时）MIC System 标签；
-- 自愈周期：环境变量 `TG_WIN_SCAN_SECONDS`（默认 30，最小 2）；
-- 退出/维护：`tg-agent unlock --state-dir 'C:\ProgramData\TamperGuard'`；
-- 想保留管理员写权限（不推荐）：`run --windows-allow-admins`；
+- 自愈周期：`TG_WIN_SCAN_SECONDS`（默认 30，最小 2）；
+- 维护/退出走卸载流程；`tg-agent unlock --state-dir ...` 仅在完全卸载前使用；
 - MIC 在不支持的宿主会自动禁用，capability 里会写明原因。
+
+**边界**：没有内核驱动，管理员取得服务/目录所有权后仍可禁用（并可能先 `taskkill` 看护进程）；产品把"一条 `sc stop` 就能停"变成需要主动夺取所有权、且停服务会被看护拉起的动作，并留下痕迹。要做到对管理员绝对阻止，只能上 minifilter 驱动（本项目明确不采用）。
 
 ### 9.8 Agent 自检与启动证据
 

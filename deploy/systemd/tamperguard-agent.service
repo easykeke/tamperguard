@@ -11,6 +11,8 @@ Type=simple
 ExecStart=/usr/local/bin/tg-agent run --state-dir /var/lib/tamperguard-agent
 Restart=always
 RestartSec=3
+# A plain `systemctl stop` must not silently disable protection.
+RefuseManualStop=yes
 StateDirectory=tamperguard-agent
 StateDirectoryMode=0700
 UMask=0077
