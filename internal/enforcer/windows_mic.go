@@ -107,7 +107,10 @@ func applySACL(path string, sddl string) error {
 	if sacl == nil || sacl.AceCount == 0 {
 		return fmt.Errorf("SDDL %q produced an empty SACL", sddl)
 	}
-	info := windows.SECURITY_INFORMATION(windows.SACL_SECURITY_INFORMATION)
+	// PROTECTED_SACL stops the system from recomputing the SACL from the
+	// parent (which turned the explicit label into an empty inherited SACL).
+	info := windows.SECURITY_INFORMATION(windows.SACL_SECURITY_INFORMATION |
+		windows.PROTECTED_SACL_SECURITY_INFORMATION)
 	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, info,
 		nil, nil, nil, sacl); err != nil {
 		return fmt.Errorf("SetNamedSecurityInfo(SACL): %w", err)

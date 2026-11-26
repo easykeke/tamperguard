@@ -55,7 +55,38 @@ func DebugIntegrity(path, levelNameCfg string) string {
 func describeLabel(b *strings.Builder, tag, path string) {
 	level, err := integrityOf(path)
 	aces, saclErr := saclAceCount(path)
-	fmt.Fprintf(b, " | %s=%s(aces=%d,readErr=%v,saclErr=%v)", tag, levelName(level), aces, err, saclErr)
+	fmt.Fprintf(b, " | %s=%s(aces=%d,types=%s,readErr=%v,saclErr=%v)", tag, levelName(level), aces, saclAceTypes(path), err, saclErr)
+}
+
+// saclAceTypes lists ACE types in the SACL so a parser mismatch is visible.
+func saclAceTypes(path string) string {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.SACL_SECURITY_INFORMATION)
+	if err != nil {
+		return "err:" + err.Error()
+	}
+	sacl, _, err := sd.SACL()
+	if err != nil {
+		return "err:" + err.Error()
+	}
+	if sacl == nil {
+		return "nil"
+	}
+	var b strings.Builder
+	for i := 0; i < int(sacl.AceCount) && i < 3; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(sacl, uint32(i), &ace); err != nil {
+			b.WriteString("getace-err")
+			break
+		}
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, "0x%x", ace.Header.AceType)
+	}
+	if b.Len() == 0 {
+		b.WriteString("empty")
+	}
+	return b.String()
 }
 
 func saclAceCount(path string) (int, error) {
