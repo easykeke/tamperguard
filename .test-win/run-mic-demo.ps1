@@ -58,10 +58,11 @@ Copy-Item -Force $labelSrc $labelExe
 
 "=== run-mic-demo $(Get-Date -Format s) user=$($identity.Name) ===" | Set-Content -Encoding UTF8 $log
 
-# Clean a previous demo.
-& takeown.exe /F $demo /R /D Y *> $null
-& icacls.exe $demo /reset /T /C *> $null
-Remove-Item -Recurse -Force $demo -ErrorAction SilentlyContinue
+# Clean a previous demo (only if it exists; takeown on a missing path is an error).
+if (Test-Path $demo) {
+    & icacls.exe $demo /reset /T /C *> $null
+    Remove-Item -Recurse -Force $demo -ErrorAction SilentlyContinue
+}
 New-Item -ItemType Directory -Force $site | Out-Null
 $index = Join-Path $site 'index.html'
 Set-Content -Path $index -Value 'original' -NoNewline

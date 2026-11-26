@@ -405,10 +405,13 @@ func (w *WindowsACL) unlock() error {
 			continue
 		}
 		if w.mic {
-			// Back to Medium so the operator's normal tooling can rewrite the
-			// tree again after the agent is retired.
-			if micErr := setIntegrity(native, levelMedium, true); micErr != nil {
-				errs = append(errs, fmt.Sprintf("%s (MIC reset): %v", native, micErr))
+			// Reset the label to Medium only when one is actually present: on
+			// hosts where labels do not round-trip there is nothing to reset and
+			// the attempt would fail for no reason.
+			if cur, ierr := integrityOf(native); ierr == nil && cur != levelUnknown {
+				if micErr := setIntegrity(native, levelMedium, true); micErr != nil {
+					errs = append(errs, fmt.Sprintf("%s (MIC reset): %v", native, micErr))
+				}
 			}
 		}
 	}
