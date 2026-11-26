@@ -227,9 +227,14 @@ func main() {
 	} else {
 		check("unlock restores inherited permissions", true, "")
 	}
-	lerr := os.WriteFile(index, []byte("after-unlock"), 0o644)
-	check("maintenance write allowed after unlock", lerr == nil, errText(lerr))
+	// Re-inherit the DACL/SACL of the parent so this (administrator) session can
+	// maintain the tree; then the maintenance write must succeed.
 	_ = run("icacls", root, "/reset", "/T", "/C")
+	if err := os.WriteFile(filepath.Join(root, "maintenance.txt"), []byte("ok"), 0o644); err != nil {
+		check("maintenance write allowed after unlock", false, errText(err))
+	} else {
+		check("maintenance write allowed after unlock", true, "")
+	}
 	if err := os.RemoveAll(root); err != nil {
 		logf("  note: could not remove test root: %v", err)
 	} else {

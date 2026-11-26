@@ -36,6 +36,12 @@ function Log([string]$msg) {
     Write-Host $msg
 }
 
+trap {
+    Log ("ERROR: " + $_.Exception.Message)
+    Log ("  at: " + $_.ScriptStackTrace)
+    exit 1
+}
+
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -78,6 +84,7 @@ $ErrorActionPreference = 'Stop'
 icacls "{0}" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(Rc,WDAC,WO)" "Everyone:(RX)" /T /C | Out-Null
 icacls "{0}" /setintegritylevel (OI)(CI)System | Out-Null
 '@ -f $site
+Log "step: apply strict DACL + System label from SYSTEM"
 Invoke-SystemScript 'setup' $setup
 
 Log "--- icacls after SYSTEM label ---"
