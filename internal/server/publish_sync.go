@@ -66,6 +66,28 @@ func (s *Server) handlePublisherSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, req)
 }
 
+// handlePublisherNodes lists protect nodes for the publisher's interactive
+// setup wizard, so a beginner never has to copy a node id by hand.
+func (s *Server) handlePublisherNodes(w http.ResponseWriter, r *http.Request) {
+	nodes, err := s.st.ListNodes()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	out := make([]map[string]string, 0, len(nodes))
+	for _, n := range nodes {
+		if n.Role != "protect" || n.Revoked {
+			continue
+		}
+		out = append(out, map[string]string{
+			"id":       n.ID,
+			"hostname": n.Hostname,
+			"status":   n.Status,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handlePublisherCurrent returns the last completed release for a node so an
 // incremental publisher can compare hashes without reading the target host.
 func (s *Server) handlePublisherCurrent(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +117,7 @@ func (s *Server) handlePublisherCurrent(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"request_id": req.ID,
 		"mode":       req.Mode,
+		"target_dir": req.TargetDir,
 		"manifest":   req.Manifest,
 		"files":      files,
 	})

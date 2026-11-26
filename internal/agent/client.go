@@ -450,6 +450,22 @@ func (c *Client) UploadArtifact(ctx context.Context, requestID, relPath, sha256H
 	return nil
 }
 
+// ProtectNode is one target listed for the publisher's setup wizard.
+type ProtectNode struct {
+	ID       string `json:"id"`
+	Hostname string `json:"hostname"`
+	Status   string `json:"status"`
+}
+
+// ProtectNodes lists live protect nodes (publisher role).
+func (c *Client) ProtectNodes(ctx context.Context) ([]ProtectNode, error) {
+	var out []ProtectNode
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/publish/nodes", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PublishSync creates a release request from the publisher itself (manual
 // trigger), instead of an administrator creating one in the console.
 func (c *Client) PublishSync(ctx context.Context, nodeID, sourceDir, targetDir, note, mode, delivery string) (*store.PublishRequest, error) {
@@ -469,17 +485,18 @@ func (c *Client) PublishSync(ctx context.Context, nodeID, sourceDir, targetDir, 
 
 // CurrentRelease returns the files of the last completed release for a node, so
 // an incremental publisher can skip unchanged files without target access.
-func (c *Client) CurrentRelease(ctx context.Context, nodeID string) (mode string, files []FileEntry, err error) {
+func (c *Client) CurrentRelease(ctx context.Context, nodeID string) (mode, targetDir string, files []FileEntry, err error) {
 	q := url.Values{}
 	q.Set("node_id", nodeID)
 	var out struct {
-		Mode  string      `json:"mode"`
-		Files []FileEntry `json:"files"`
+		Mode      string      `json:"mode"`
+		TargetDir string      `json:"target_dir"`
+		Files     []FileEntry `json:"files"`
 	}
 	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/publish/current?"+q.Encode(), nil, &out); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
-	return out.Mode, out.Files, nil
+	return out.Mode, out.TargetDir, out.Files, nil
 }
 
 // GetPublishRequest returns one request to its publisher.

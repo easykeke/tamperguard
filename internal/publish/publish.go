@@ -218,9 +218,14 @@ func (p *Publisher) knownHashes(ctx context.Context, req store.PublishRequest) (
 	if req.Delivery != store.DeliveryPull {
 		return hashTree(req.TargetDir)
 	}
-	_, files, err := p.client.CurrentRelease(ctx, req.NodeID)
+	_, targetDir, files, err := p.client.CurrentRelease(ctx, req.NodeID)
 	if err != nil {
 		return nil, err
+	}
+	// A different target means the hashes describe a different tree; treat it
+	// as a full release instead of wrongly skipping files.
+	if targetDir != "" && targetDir != req.TargetDir {
+		return map[string]string{}, nil
 	}
 	out := make(map[string]string, len(files))
 	for _, f := range files {
@@ -256,6 +261,11 @@ type SyncOptions struct {
 	Note      string
 	Mode      string
 	Delivery  string
+}
+
+// ProtectNodes lists target nodes for the interactive setup wizard.
+func (p *Publisher) ProtectNodes(ctx context.Context) ([]agent.ProtectNode, error) {
+	return p.client.ProtectNodes(ctx)
 }
 
 // TriggerSync creates a release from the publisher host and waits for its

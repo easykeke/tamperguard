@@ -23,6 +23,8 @@
 - **发布模式与手动触发**：发布请求新增 `mode`（full / incremental）。增量模式按 SHA-256 与目标目录（local）或上次成功发布清单（pull）比对，只写入变化文件；所有文件仍逐项哈希校验，local 写完后再读回复核。
 - **发布端自触发同步**：`tg-publish sync --node --source --target --mode --delivery` 直接创建请求并等待完成，不再依赖管理页；新增 publish 角色接口 `/publish/sync`、`/publish/current`、`/publish/{id}`。页面新增「同步模式」选择与列表「模式」列。
 
+- **发布端向导式同步**：`tg-publish sync` 无参数时交互式选择节点/源目录/目标目录/模式/方式，配置保存到发布端本地；之后一条 `tg-publish sync`（或 `tg-publish sync /srv/release`）即可同步，`--reset` 重新配置。参数可放在源目录前后，脚本模式保持不变。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。

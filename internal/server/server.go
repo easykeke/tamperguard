@@ -235,6 +235,7 @@ func (s *Server) routes() {
 	m.Handle("GET /api/v1/audit/verify", s.admin(s.handleAuditVerify))
 
 	m.Handle("POST /api/v1/publish/sync", s.agent("publish", s.handlePublisherSync))
+	m.Handle("GET /api/v1/publish/nodes", s.agent("publish", s.handlePublisherNodes))
 	m.Handle("GET /api/v1/publish/current", s.agent("publish", s.handlePublisherCurrent))
 	m.Handle("GET /api/v1/publish/{id}", s.agent("publish", s.handlePublishGet))
 	m.Handle("GET /api/v1/publish/pending", s.agent("publish", s.handlePublishPending))
