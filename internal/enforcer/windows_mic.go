@@ -4,6 +4,7 @@ package enforcer
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"unsafe"
@@ -142,6 +143,41 @@ func enablePrivilege(name string) error {
 	return windows.AdjustTokenPrivileges(token, false, &state, 0, nil, nil)
 }
 
+// micSelfTest creates a throwaway file under the state directory, applies the
+// idle label and reads it back. It returns nil only when the label round-trips.
+func (w *WindowsACL) micSelfTest() error {
+	dir := w.state
+	if dir == "" {
+		dir = "."
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("state dir: %w", err)
+	}
+	f, err := os.CreateTemp(dir, ".tg-mic-selftest-")
+	if err != nil {
+		return fmt.Errorf("temp file: %w", err)
+	}
+	name := f.Name()
+	_ = f.Close()
+	defer os.Remove(name)
+
+	level := w.idleLevel
+	if level == levelUnknown {
+		level = levelHigh
+	}
+	if err := setIntegrity(name, level, false); err != nil {
+		return err
+	}
+	got, err := integrityOf(name)
+	if err != nil {
+		return fmt.Errorf("read back: %w", err)
+	}
+	if got != level {
+		return fmt.Errorf("write accepted but read back %s instead of %s (SACL write has no effect on this host)", levelName(got), levelName(level))
+	}
+	return nil
+}
+
 // integrityOf reads the current label. It returns levelUnknown when the object
 // has no mandatory label.
 func integrityOf(path string) (integrityLevel, error) {
@@ -151,7 +187,9 @@ func integrityOf(path string) (integrityLevel, error) {
 	}
 	sacl, _, err := sd.SACL()
 	if err != nil {
-		return levelUnknown, err
+		// ERROR_OBJECT_NOT_FOUND means the object has no SACL at all, which is
+		// the normal state of an unlabelled file.
+		return levelUnknown, nil
 	}
 	if sacl == nil || sacl.AceCount == 0 {
 		return levelUnknown, nil

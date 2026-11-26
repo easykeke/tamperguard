@@ -120,6 +120,16 @@ func NewWindowsACL(cfg WindowsACLConfig) (*WindowsACL, error) {
 				level = tok
 			}
 			w.idleLevel = level
+			// Prove the label round-trip on this host before trusting it. Some
+			// Windows builds/environments accept the SACL write but leave an
+			// empty SACL behind; treating that as "MIC enabled" would produce
+			// false health alerts forever, so disable the layer explicitly.
+			if err := w.micSelfTest(); err != nil {
+				w.mic = false
+				w.micErr = err
+				w.log.Warn("windows-acl: MIC unavailable on this host; continuing with ACL lockdown + self-heal",
+					"err", err)
+			}
 		}
 	}
 	for _, raw := range cfg.PublisherSIDs {
@@ -150,6 +160,8 @@ func (w *WindowsACL) Capability() Capability {
 	}
 	if w.mic {
 		reason += fmt.Sprintf("; MIC: protected paths are labelled %s with NO_WRITE_UP, so processes below that level (including elevated administrators when the level is System) are denied writes as well", levelName(w.idleLevel))
+	} else if w.micErr != nil {
+		reason += fmt.Sprintf("; MIC unavailable on this host: %v", w.micErr)
 	}
 	reason += "; a determined administrator can still stop the agent or retake ownership, which is why audit evidence exists"
 	if w.base != nil {

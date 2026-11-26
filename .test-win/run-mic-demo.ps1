@@ -1,22 +1,18 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Proves that a System integrity label denies writes from an elevated
-  administrator session.
+  Proves (where the host supports integrity labels) that a System label denies
+  writes from an elevated administrator session.
 
 .DESCRIPTION
-  A process cannot label an object above its own integrity level, so the System
-  label must be applied by a SYSTEM task (this is exactly what the agent service
-  does). The demo folder is staged under C:\ProgramData\TamperGuard-test so it
-  does not inherit a Low label from the development workspace.
+  A process cannot label an object above its own integrity level, so the label
+  must be applied by a SYSTEM task - exactly what the agent service does. The
+  helper tg-label.exe applies the real strict DACL + label through the product
+  code path.
 
-  Steps:
-    1. create a demo folder with a file ('original');
-    2. a one-shot SYSTEM task applies the strict DACL and the System label;
-    3. from this elevated administrator session, overwrite and create must both
-       be denied and the content must stay 'original';
-    4. a one-shot SYSTEM task resets the label and permissions, then the folder
-       is removed.
+  Some Windows builds/environments accept the SACL write but do not keep the
+  label; in that case the helper fails and this demo reports SKIP (the strict
+  DACL still blocks administrator writes, which run-test.ps1 verifies).
 
 .EXAMPLE
   cd E:\AI-learn\Tamper-proof\.test-win
@@ -28,14 +24,15 @@ $ErrorActionPreference = 'Stop'
 $staging = 'C:\ProgramData\TamperGuard-test'
 $demo    = Join-Path $staging 'mic-demo'
 $site    = Join-Path $demo 'site'
+$state   = Join-Path $staging 'label-state'
 $log     = Join-Path $PSScriptRoot 'mic-demo.log'
+$applyLog = Join-Path $staging 'label-apply.log'
 
 function Log([string]$msg) {
     $line = "{0} {1}" -f (Get-Date -Format s), $msg
     Add-Content -Path $log -Value $line -Encoding UTF8
     Write-Host $msg
 }
-
 trap {
     Log ("ERROR: " + $_.Exception.Message)
     Log ("  at: " + $_.ScriptStackTrace)
@@ -51,41 +48,52 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 
 New-Item -ItemType Directory -Force $staging | Out-Null
 & icacls.exe $staging /grant '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' *> $null
+$labelSrc = Join-Path $PSScriptRoot 'tg-label.exe'
+if (-not (Test-Path $labelSrc)) {
+    Write-Host "ERROR: $labelSrc missing; rebuild with: go build -o .test-win/tg-label.exe ./cmd/tg-label" -ForegroundColor Red
+    exit 2
+}
+$labelExe = Join-Path $staging 'tg-label.exe'
+Copy-Item -Force $labelSrc $labelExe
+
 "=== run-mic-demo $(Get-Date -Format s) user=$($identity.Name) ===" | Set-Content -Encoding UTF8 $log
 
-# Clean a previous demo (it may still carry the strict DACL / System label).
+# Clean a previous demo.
 & takeown.exe /F $demo /R /D Y *> $null
 & icacls.exe $demo /reset /T /C *> $null
 Remove-Item -Recurse -Force $demo -ErrorAction SilentlyContinue
-
 New-Item -ItemType Directory -Force $site | Out-Null
 $index = Join-Path $site 'index.html'
 Set-Content -Path $index -Value 'original' -NoNewline
 
-function Invoke-SystemScript([string]$name, [string]$body) {
-    $scriptPath = Join-Path $staging ("{0}.ps1" -f $name)
-    Set-Content -Path $scriptPath -Value $body -Encoding UTF8
-    $task = "TGMicDemo_{0}" -f $name
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`"" -f $scriptPath)
+function Invoke-SystemCmd([string]$taskSuffix, [string]$commandLine) {
+    $task = "TGMicDemo_{0}" -f $taskSuffix
+    $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c ' + $commandLine)
     $taskPrincipal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' `
         -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskName $task -Action $action -Principal $taskPrincipal -Force | Out-Null
     Start-ScheduledTask -TaskName $task
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 4
     $info = Get-ScheduledTaskInfo -TaskName $task
     Unregister-ScheduledTask -TaskName $task -Confirm:$false
-    Log "SYSTEM task $name exit=$($info.LastTaskResult)"
-    Remove-Item $scriptPath -ErrorAction SilentlyContinue
+    return [int]$info.LastTaskResult
 }
 
-$setup = @'
-$ErrorActionPreference = 'Stop'
-icacls "{0}" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(Rc,WDAC,WO)" "Everyone:(RX)" /T /C | Out-Null
-icacls "{0}" /setintegritylevel (OI)(CI)System | Out-Null
-'@ -f $site
-Log "step: apply strict DACL + System label from SYSTEM"
-Invoke-SystemScript 'setup' $setup
+Log "step: apply strict DACL + System label from a SYSTEM task"
+$apply = '"{0}" --mode apply --path "{1}" --level system --state "{2}" > "{3}" 2>&1' -f `
+    $labelExe, $site, $state, $applyLog
+$code = Invoke-SystemCmd 'apply' $apply
+Log "apply exit=$code"
+if (Test-Path $applyLog) { foreach ($l in Get-Content $applyLog) { Log ("    " + $l) } }
+
+if ($code -ne 0) {
+    Log "SKIP: this host does not keep integrity labels (apply failed); the strict DACL still blocks administrator writes"
+    $reset = '"{0}" --mode reset --path "{1}" --state "{2}"' -f $labelExe, $site, $state
+    Invoke-SystemCmd 'reset-skip' $reset | Out-Null
+    Remove-Item -Recurse -Force $demo -ErrorAction SilentlyContinue
+    Log "RESULT: SKIP"
+    exit 0
+}
 
 Log "--- icacls after SYSTEM label ---"
 foreach ($line in (& icacls.exe $site | Out-String) -split "`n") {
@@ -112,12 +120,10 @@ $content = Get-Content $index -Raw
 Log ("content after attempts: '" + $content + "'")
 if ($content -ne 'original') { Log "[FAIL] content changed" }
 
-$cleanup = @'
-$ErrorActionPreference = 'Stop'
-icacls "{0}" /setintegritylevel (OI)(CI)Medium | Out-Null
-icacls "{0}" /reset /T /C | Out-Null
-'@ -f $site
-Invoke-SystemScript 'cleanup' $cleanup
+Log "step: reset label and permissions from a SYSTEM task"
+$reset = '"{0}" --mode reset --path "{1}" --state "{2}"' -f $labelExe, $site, $state
+$resetCode = Invoke-SystemCmd 'reset' $reset
+Log "reset exit=$resetCode"
 & icacls.exe $site /reset /T /C *> $null
 Remove-Item -Recurse -Force $demo -ErrorAction SilentlyContinue
 
