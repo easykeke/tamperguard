@@ -3,6 +3,7 @@
 ## 未发布（0.2.2 开发中）
 
 - **Web 层内容校验代理（P5.8）**：`tg-proxy` 把站点快照进内容寻址存储，逐请求校验磁盘文件；被篡改时返回可信副本并记 `web.tamper-detected`，清单外新增文件默认 404（可配置 upstream 转发动态请求）。Linux/Windows 通用，无需管理员或驱动。文档见 `docs/web-verification.md`，测试 `go test ./internal/webproxy`、`make e2e-proxy`。
+- **签名清单模式**：`tg-proxy --sync --agent-state ...` 通过 mTLS 拉取控制面签发的站点清单（Ed25519，绑定节点/发布/目标目录/文件哈希），从控制面下载制品并逐个校验后建立可信存储；`--require-signed` 拒绝未签名或被篡改的清单，启动时用 policy 公钥复验签名。`GET /api/v1/agent/manifest`；测试 `make e2e-proxy-signed`。
 ## 0.2.1（2026-11-26）
 
 相对 0.2.0：Windows 严格模式在真实主机验证通过（DACL + 自愈），MIC 改为自检式可选层；事件驱动自愈把篡改回滚窗口压到亚秒级；新增 Windows 服务安装脚本、测试工具与更完整的技术调研。

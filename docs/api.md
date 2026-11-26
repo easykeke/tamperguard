@@ -147,6 +147,7 @@ write and retries on `EPERM` while the token is valid.
 | POST | `/agent/heartbeat` | `{"status","enforcer","policy_digest","caps","degraded","audit_seq","enforcer_healthy"}` | Returns `{"policy":Snapshot,"grants":[...],"revocations":[...],"server_time","heartbeat_interval"}` |
 | POST | `/agent/audit` | `{"records":[...]}` | Batch upload; server verifies chain, returns `{"ack_seq","alerts":[...]}` |
 | POST | `/agent/grants` | `{"active_tokens":["tok_..."]}` | Agent reports which grants it actually installed; used by the publisher readiness check |
+| GET | `/agent/manifest` | protect 角色 mTLS | 最近一次已完成 pull 发布的签名站点清单 `{node_id,request_id,manifest,target_dir,files[],signed_at,signature}`；无发布时 404 `no_release` |
 | GET | `/agent/upgrade` | `current,os,arch` | `{"available","current","manifest":{"version","os","arch","sha256","size","signature"}}`; manifest is Ed25519-signed |
 | GET | `/agent/upgrade/download` | `version,os,arch` | Streams the signed agent binary |
 | GET | `/agent/stream` | — | `text/event-stream`. Events: `hello`, `policy`, `revoke`, `grant`. A dropped event only costs latency; the heartbeat reconciles. |

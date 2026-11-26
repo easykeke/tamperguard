@@ -72,6 +72,10 @@ e2e-pull:
 e2e-landlock:
 	bash test/e2e/e2e-landlock.sh
 
+## e2e-proxy-signed: proxy with the control-plane signed manifest
+e2e-proxy-signed:
+	bash test/e2e/e2e-proxy-signed.sh
+
 ## e2e-proxy: web-layer integrity proxy
 e2e-proxy:
 	bash test/e2e/e2e-proxy.sh

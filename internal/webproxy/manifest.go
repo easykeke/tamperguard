@@ -38,7 +38,18 @@ type Manifest struct {
 	CreatedAt int64            `json:"created_at"`
 	Root      string           `json:"root,omitempty"`
 	Entries   map[string]Entry `json:"entries"`
+
+	// Control-plane-signed manifest metadata (empty for a local snapshot).
+	ReleaseID     string `json:"release_id,omitempty"`
+	NodeID        string `json:"node_id,omitempty"`
+	TargetDir     string `json:"target_dir,omitempty"`
+	ReleaseDigest string `json:"release_digest,omitempty"`
+	SignedAt      int64  `json:"signed_at,omitempty"`
+	Signature     string `json:"signature,omitempty"`
 }
+
+// Signed reports whether the manifest came from a signed release.
+func (m *Manifest) Signed() bool { return m.Signature != "" }
 
 // Lookup maps a request path to a manifest entry.
 func (m *Manifest) Lookup(rel string) (Entry, bool) {

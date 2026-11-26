@@ -193,6 +193,7 @@ func (s *Server) routes() {
 	m.Handle("GET /api/v1/agent/upgrade", s.agent("protect", s.handleUpgrade))
 	m.Handle("GET /api/v1/agent/upgrade/download", s.agent("protect", s.handleUpgradeDownload))
 	m.Handle("GET /api/v1/agent/stream", s.agent("protect", s.handleStream))
+	m.Handle("GET /api/v1/agent/manifest", s.agent("protect", s.handleSiteManifest))
 
 	m.Handle("GET /api/v1/overview", s.admin(s.handleOverview))
 

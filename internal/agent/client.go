@@ -31,8 +31,9 @@ import (
 
 // Client talks to the control plane over mutual TLS.
 type Client struct {
-	base string
-	hc   *http.Client
+	base      string
+	hc        *http.Client
+	policyPub ed25519.PublicKey
 }
 
 // NewClient builds a client from persisted agent state.
@@ -57,9 +58,14 @@ func NewClient(state *config.AgentState) (*Client, error) {
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
+	policyPub, err := decodeHexKey(state.PolicyPub)
+	if err != nil {
+		return nil, fmt.Errorf("agent: policy public key: %w", err)
+	}
 	return &Client{
-		base: strings.TrimRight(state.ServerURL, "/"),
-		hc:   &http.Client{Transport: tr, Timeout: 30 * time.Second},
+		base:      strings.TrimRight(state.ServerURL, "/"),
+		hc:        &http.Client{Transport: tr, Timeout: 30 * time.Second},
+		policyPub: policyPub,
 	}, nil
 }
 
@@ -267,6 +273,36 @@ func (c *Client) PublishReady(ctx context.Context, id string) (bool, error) {
 		return false, err
 	}
 	return out.Ready, nil
+}
+
+// decodeHexKey parses a hex-encoded Ed25519 public key from the agent state.
+func decodeHexKey(s string) (ed25519.PublicKey, error) {
+	raw, err := hex.DecodeString(strings.TrimSpace(s))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("want %d bytes, got %d", ed25519.PublicKeySize, len(raw))
+	}
+	return ed25519.PublicKey(raw), nil
+}
+
+// LatestSiteManifest fetches and verifies the control-plane-signed description of
+// the site this node should be serving. ok=false means no completed pull release
+// exists yet.
+func (c *Client) LatestSiteManifest(ctx context.Context) (sm *release.SiteManifest, ok bool, err error) {
+	var got release.SiteManifest
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agent/manifest", nil, &got); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if err := release.VerifySiteManifest(c.policyPub, &got); err != nil {
+		return nil, false, err
+	}
+	return &got, true, nil
 }
 
 // ---------- pull delivery ----------

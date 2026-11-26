@@ -17,6 +17,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/audit"
 	"github.com/easykeke/tamperguard/internal/idgen"
 	"github.com/easykeke/tamperguard/internal/policy"
+	"github.com/easykeke/tamperguard/internal/release"
 	"github.com/easykeke/tamperguard/internal/store"
 	"github.com/easykeke/tamperguard/internal/token"
 )
@@ -688,4 +689,40 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// handleSiteManifest returns the signed description of the site the node should
+// be serving: the latest completed pull-mode release. The web-layer proxy uses it
+// instead of trusting the local disk at snapshot time.
+func (s *Server) handleSiteManifest(w http.ResponseWriter, r *http.Request) {
+	nodeID, _ := clientCN(r)
+	req, err := s.st.LatestCompletedPublishForNode(nodeID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "no_release",
+			"no completed pull-mode release for this node (local-mode releases have no artefacts on the control plane)")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	files, err := s.st.ListPublishFiles(req.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	sm := release.SiteManifest{
+		NodeID:    nodeID,
+		RequestID: req.ID,
+		Manifest:  req.Manifest,
+		TargetDir: req.TargetDir,
+	}
+	for _, f := range files {
+		sm.Files = append(sm.Files, release.SiteFile{Path: f.Path, SHA256: f.SHA256, Size: f.Size})
+	}
+	if err := release.SignSiteManifest(s.policyPriv, &sm); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sm)
 }

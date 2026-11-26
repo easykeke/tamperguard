@@ -70,3 +70,28 @@ tg-proxy --root /var/www/site --state /var/lib/tg-proxy --no-snapshot --listen 1
 go test ./internal/webproxy        # 单测：校验/回退/审计/穿越/符号链接
 make e2e-proxy                     # 端到端：篡改后仍返回可信内容 + 审计 + 动态转发
 ```
+
+## 6. 签名清单模式（推荐生产使用）
+
+默认快照模式是"首次信任"：如果快照时站点已被篡改，基线就是坏内容。签名清单模式把可信来源换成控制面：
+
+```bash
+# 1. 控制面为节点签名"最新一次 pull 发布"的站点清单（Ed25519，绑定节点/请求/发布摘要/目标目录/文件哈希）
+#    代理通过 mTLS 拉取清单，并逐个下载制品，回算 SHA-256 与签名清单比对
+tg-proxy --root /var/www/site --state /var/lib/tg-proxy \
+  --sync --agent-state /var/lib/tamperguard --snapshot-only
+
+# 2. 运行时要求清单必须是签名的，并在启动时用 agent 的 policy 公钥复验
+tg-proxy --root /var/www/site --state /var/lib/tg-proxy \
+  --listen 0.0.0.0:8080 --no-snapshot --require-signed \
+  --agent-state /var/lib/tamperguard --upstream http://127.0.0.1:8000
+```
+
+要点：
+
+- 清单由控制面的 policy 签名密钥签发，代理用 agent 注册时下发的 `policy_public_key` 验签；
+- 制品从控制面下载并校验，**本地磁盘不参与建立信任**；
+- `--require-signed` 会拒绝本地快照产生的未签名清单，并阻止使用被篡改的清单文件；
+- 只有 pull 模式的发布在控制面留有制品，本地模式发布没有清单可同步。
+
+控制面接口：`GET /api/v1/agent/manifest`（protect 角色，mTLS），返回节点最近一次已完成 pull 发布的签名清单。

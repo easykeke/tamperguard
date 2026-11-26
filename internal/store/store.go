@@ -843,6 +843,20 @@ func (s *Store) ClaimPublishDelivery(id, nodeID string) (bool, error) {
 	return n > 0, nil
 }
 
+// LatestCompletedPublishForNode returns the newest completed pull-mode release
+// for a node. Local-mode releases leave no artefacts on the control plane, so
+// the signed site manifest only exists for pull deliveries.
+func (s *Store) LatestCompletedPublishForNode(nodeID string) (PublishRequest, error) {
+	row := s.db.QueryRow(`SELECT `+publishCols+` FROM publish_requests
+		WHERE node_id=? AND status=? AND delivery=? ORDER BY updated_at DESC LIMIT 1`,
+		nodeID, PublishDone, DeliveryPull)
+	r, err := scanPublish(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PublishRequest{}, ErrNotFound
+	}
+	return r, err
+}
+
 // ---------- tokens ----------
 
 // InsertToken records an issued token.
