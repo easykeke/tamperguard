@@ -327,6 +327,18 @@ func (s *Store) migrate() error {
 			published_at INTEGER NOT NULL,
 			PRIMARY KEY (version, os, arch)
 		)`,
+		`CREATE TABLE IF NOT EXISTS uninstall_requests (
+			id TEXT PRIMARY KEY,
+			node_id TEXT NOT NULL,
+			nonce TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			ticket TEXT NOT NULL DEFAULT '',
+			decided_by TEXT NOT NULL DEFAULT '',
+			requested_at INTEGER NOT NULL,
+			decided_at INTEGER NOT NULL DEFAULT 0,
+			UNIQUE (node_id, nonce)
+		)`,
 		`CREATE TABLE IF NOT EXISTS publish_files (
 			request_id TEXT NOT NULL,
 			path TEXT NOT NULL,
@@ -855,6 +867,95 @@ func (s *Store) LatestCompletedPublishForNode(nodeID string) (PublishRequest, er
 		return PublishRequest{}, ErrNotFound
 	}
 	return r, err
+}
+
+// ---------- uninstall requests ----------
+
+// UninstallRequest tracks a client-initiated uninstall waiting for approval.
+type UninstallRequest struct {
+	ID          string `json:"id"`
+	NodeID      string `json:"node_id"`
+	Nonce       string `json:"nonce"`
+	Reason      string `json:"reason"`
+	Status      string `json:"status"`
+	Ticket      string `json:"ticket,omitempty"`
+	DecidedBy   string `json:"decided_by,omitempty"`
+	RequestedAt int64  `json:"requested_at"`
+	DecidedAt   int64  `json:"decided_at,omitempty"`
+}
+
+// CreateUninstallRequest stores a pending request (idempotent per node+nonce).
+func (s *Store) CreateUninstallRequest(r UninstallRequest) (UninstallRequest, error) {
+	r.RequestedAt = now()
+	r.Status = "pending"
+	if _, err := s.db.Exec(`INSERT INTO uninstall_requests
+		(id, node_id, nonce, reason, status, requested_at) VALUES (?,?,?,?,?,?)
+		ON CONFLICT(node_id, nonce) DO NOTHING`,
+		r.ID, r.NodeID, r.Nonce, r.Reason, r.Status, r.RequestedAt); err != nil {
+		return UninstallRequest{}, err
+	}
+	// Return the existing row (a retried request must keep the same id).
+	row := s.db.QueryRow(`SELECT id, node_id, nonce, reason, status, ticket, decided_by, requested_at, decided_at
+		FROM uninstall_requests WHERE node_id=? AND nonce=?`, r.NodeID, r.Nonce)
+	var out UninstallRequest
+	if err := row.Scan(&out.ID, &out.NodeID, &out.Nonce, &out.Reason, &out.Status, &out.Ticket,
+		&out.DecidedBy, &out.RequestedAt, &out.DecidedAt); err != nil {
+		return UninstallRequest{}, err
+	}
+	return out, nil
+}
+
+// GetUninstallRequest returns one request by id.
+func (s *Store) GetUninstallRequest(id string) (UninstallRequest, error) {
+	row := s.db.QueryRow(`SELECT id, node_id, nonce, reason, status, ticket, decided_by, requested_at, decided_at
+		FROM uninstall_requests WHERE id=?`, id)
+	var out UninstallRequest
+	if err := row.Scan(&out.ID, &out.NodeID, &out.Nonce, &out.Reason, &out.Status, &out.Ticket,
+		&out.DecidedBy, &out.RequestedAt, &out.DecidedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return UninstallRequest{}, ErrNotFound
+		}
+		return UninstallRequest{}, err
+	}
+	return out, nil
+}
+
+// ListUninstallRequests lists requests, optionally filtered by status.
+func (s *Store) ListUninstallRequests(status string, limit int) ([]UninstallRequest, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	q := `SELECT id, node_id, nonce, reason, status, ticket, decided_by, requested_at, decided_at
+		FROM uninstall_requests`
+	args := []any{}
+	if status != "" {
+		q += ` WHERE status=?`
+		args = append(args, status)
+	}
+	q += ` ORDER BY requested_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UninstallRequest
+	for rows.Next() {
+		var r UninstallRequest
+		if err := rows.Scan(&r.ID, &r.NodeID, &r.Nonce, &r.Reason, &r.Status, &r.Ticket,
+			&r.DecidedBy, &r.RequestedAt, &r.DecidedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DecideUninstall records an approval or denial (and the signed ticket).
+func (s *Store) DecideUninstall(id, status, ticket, decidedBy string) error {
+	_, err := s.db.Exec(`UPDATE uninstall_requests SET status=?, ticket=?, decided_by=?, decided_at=?
+		WHERE id=? AND status='pending'`, status, ticket, decidedBy, now(), id)
+	return err
 }
 
 // ---------- tokens ----------

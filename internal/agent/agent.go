@@ -20,6 +20,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/enforcer"
 	"github.com/easykeke/tamperguard/internal/policy"
 	"github.com/easykeke/tamperguard/internal/rasp"
+	"github.com/easykeke/tamperguard/internal/uninstall"
 )
 
 // Options tunes agent behaviour.
@@ -211,6 +212,10 @@ func (a *Agent) streamLoop(ctx context.Context) {
 			return
 		}
 		err := a.client.Stream(ctx, func(kind string, data []byte) {
+			if kind == "uninstall" {
+				a.handleRemoteUninstall(data)
+				return
+			}
 			select {
 			case a.wake <- struct{}{}:
 			default:
@@ -229,6 +234,42 @@ func (a *Agent) streamLoop(ctx context.Context) {
 			backoff *= 2
 		}
 	}
+}
+
+// handleRemoteUninstall reacts to a ticket pushed by the management plane. The
+// ticket is verified against the control-plane policy key before anything is
+// removed; cleanup runs detached because stopping the service terminates this
+// process.
+func (a *Agent) handleRemoteUninstall(data []byte) {
+	var ev struct {
+		Payload struct {
+			Ticket string `json:"ticket"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &ev); err != nil || ev.Payload.Ticket == "" {
+		return
+	}
+	tk, err := a.client.VerifyUninstallTicket(ev.Payload.Ticket, a.state.AgentID, "")
+	if err != nil {
+		a.log.Error("remote uninstall ticket rejected", "err", err)
+		return
+	}
+	a.log.Warn("control plane approved uninstall; removing agent", "request", tk.RequestID)
+	exe, _ := os.Executable()
+	unit, service := uninstall.DefaultSystemTargets()
+	opts := uninstall.Options{
+		StateDir:    a.state.StateDir,
+		BinaryPath:  exe,
+		UnitPath:    unit,
+		ServiceName: service,
+	}
+	if err := uninstall.SpawnDetached(opts); err != nil {
+		a.log.Error("cannot schedule uninstall cleanup", "err", err)
+		return
+	}
+	// Give the audit queue a moment to flush; the detached helper takes over.
+	time.Sleep(300 * time.Millisecond)
+	os.Exit(0)
 }
 
 func (a *Agent) tick(ctx context.Context) {

@@ -27,6 +27,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/policy"
 	"github.com/easykeke/tamperguard/internal/release"
 	"github.com/easykeke/tamperguard/internal/store"
+	"github.com/easykeke/tamperguard/internal/uninstall"
 )
 
 // Client talks to the control plane over mutual TLS.
@@ -303,6 +304,57 @@ func (c *Client) LatestSiteManifest(ctx context.Context) (sm *release.SiteManife
 		return nil, false, err
 	}
 	return &got, true, nil
+}
+
+// ---------- uninstall ----------
+
+// UninstallStatus is the control-plane answer for a pending request.
+type UninstallStatus struct {
+	RequestID string `json:"request_id"`
+	Status    string `json:"status"`
+	Ticket    string `json:"ticket"`
+}
+
+// RequestUninstall creates a client-initiated uninstall request. The returned id
+// is polled until an administrator approves or denies it.
+func (c *Client) RequestUninstall(ctx context.Context, nonce, reason string) (string, error) {
+	var out struct {
+		RequestID string `json:"request_id"`
+		Status    string `json:"status"`
+	}
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/uninstall/request",
+		map[string]string{"nonce": nonce, "reason": reason}, &out); err != nil {
+		return "", err
+	}
+	return out.RequestID, nil
+}
+
+// GetUninstallStatus polls a request.
+func (c *Client) GetUninstallStatus(ctx context.Context, id string) (*UninstallStatus, error) {
+	var out UninstallStatus
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agent/uninstall/"+id, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// VerifyUninstallTicket checks the control-plane signature, the target node and
+// (when nonce is not empty) the request nonce.
+func (c *Client) VerifyUninstallTicket(encoded, nodeID, nonce string) (*uninstall.Ticket, error) {
+	tk, err := uninstall.DecodeTicket(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("agent: decode uninstall ticket: %w", err)
+	}
+	if err := uninstall.Verify(c.policyPub, tk, time.Now()); err != nil {
+		return nil, err
+	}
+	if tk.NodeID != nodeID {
+		return nil, fmt.Errorf("agent: uninstall ticket targets node %q", tk.NodeID)
+	}
+	if nonce != "" && tk.Nonce != nonce {
+		return nil, errors.New("agent: uninstall ticket nonce does not match this request")
+	}
+	return tk, nil
 }
 
 // ---------- pull delivery ----------

@@ -1,24 +1,27 @@
 package server
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
 
 // Event kinds pushed over the agent stream.
 const (
-	EventPolicy = "policy"
-	EventRevoke = "revoke"
-	EventGrant  = "grant"
+	EventPolicy    = "policy"
+	EventRevoke    = "revoke"
+	EventGrant     = "grant"
+	EventUninstall = "uninstall"
 )
 
 // Event is a lightweight nudge: it tells the agent that something changed and
 // it should sync now. The authoritative state always comes from the heartbeat
 // response, so a dropped event costs latency, never correctness.
 type Event struct {
-	Kind   string `json:"kind"`
-	NodeID string `json:"node_id,omitempty"`
-	At     int64  `json:"at"`
+	Kind    string          `json:"kind"`
+	NodeID  string          `json:"node_id,omitempty"`
+	At      int64           `json:"at"`
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
 type subscriber struct {

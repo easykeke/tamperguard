@@ -24,6 +24,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/enforcer"
 	"github.com/easykeke/tamperguard/internal/fsverity"
 	"github.com/easykeke/tamperguard/internal/landlock"
+	"github.com/easykeke/tamperguard/internal/uninstall"
 )
 
 func main() {
@@ -43,6 +44,8 @@ func main() {
 		err = cmdLandlock(os.Args[2:])
 	case "verity":
 		err = cmdVerity(os.Args[2:])
+	case "uninstall":
+		err = cmdUninstall(os.Args[2:])
 	case "unlock":
 		err = cmdUnlock(os.Args[2:])
 	case "help", "-h", "--help":
@@ -67,6 +70,7 @@ func usage() {
   tg-agent probe  [--state-dir DIR]
   tg-agent landlock [--allow-write DIRS] [--check] -- CMD [ARGS...]
   tg-agent verity  enable|digest|check PATH
+  tg-agent uninstall [--state-dir DIR] [--ticket CODE] [--reason TEXT] [--dry-run]
   tg-agent unlock [--state-dir DIR]   (Windows: restore inherited permissions)
 `)
 }
@@ -148,6 +152,98 @@ func cmdLandlock(args []string) error {
 	if err := landlock.Exec(cfg, command, os.Environ()); err != nil {
 		return fmt.Errorf("landlock: %w", err)
 	}
+	return nil
+}
+
+// cmdUninstall removes the agent. There are exactly two ways to get here:
+// an administrator approves the request and hands back a challenge code, or the
+// management plane pushes a ticket to the running agent. A local decision alone
+// never uninstalls the agent.
+func cmdUninstall(args []string) error {
+	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
+	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
+	reason := fs.String("reason", "", "why the agent is being removed (shown to the administrator)")
+	ticketCode := fs.String("ticket", "", "challenge code returned after management approval; skips the request/poll flow")
+	timeout := fs.Duration("timeout", 10*time.Minute, "how long to wait for an administrator to approve")
+	dryRun := fs.Bool("dry-run", false, "verify the ticket and stop (remove nothing)")
+	_ = fs.Parse(args)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	state, err := config.LoadAgentState(*stateDir)
+	if err != nil {
+		return err
+	}
+	client, err := agent.NewClient(state)
+	if err != nil {
+		return err
+	}
+
+	ticket := *ticketCode
+	nonce := ""
+	if ticket == "" {
+		nonce, err = uninstall.Nonce()
+		if err != nil {
+			return err
+		}
+		id, err := client.RequestUninstall(ctx, nonce, *reason)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("request_id=%s\n", id)
+		fmt.Println("waiting for an administrator to approve the uninstall request...")
+		deadline := time.Now().Add(*timeout)
+		for ticket == "" {
+			if time.Now().After(deadline) {
+				return errors.New("uninstall: approval timed out; the request is still pending on the control plane")
+			}
+			st, err := client.GetUninstallStatus(ctx, id)
+			if err != nil {
+				return err
+			}
+			switch st.Status {
+			case uninstall.StatusApproved:
+				ticket = st.Ticket
+			case uninstall.StatusDenied:
+				return errors.New("uninstall: request denied by the administrator")
+			default:
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+				}
+			}
+		}
+	}
+
+	tk, err := client.VerifyUninstallTicket(ticket, state.AgentID, nonce)
+	if err != nil {
+		return fmt.Errorf("uninstall: challenge code rejected: %w", err)
+	}
+	fmt.Printf("challenge verified: request=%s expires=%s\n", tk.RequestID, time.Unix(tk.ExpiresAt, 0).Format(time.RFC3339))
+
+	exe, _ := os.Executable()
+	unit, service := uninstall.DefaultSystemTargets()
+	opts := uninstall.Options{
+		StateDir:    *stateDir,
+		BinaryPath:  exe,
+		UnitPath:    unit,
+		ServiceName: service,
+		DryRun:      *dryRun,
+	}
+	actions, perr := uninstall.Perform(ctx, opts)
+	for _, a := range actions {
+		fmt.Println(" -", a)
+	}
+	if *dryRun {
+		fmt.Println("dry-run: no files were removed")
+		return nil
+	}
+	if perr != nil {
+		return perr
+	}
+	fmt.Println("agent uninstalled")
 	return nil
 }
 

@@ -76,6 +76,10 @@ e2e-landlock:
 e2e-proxy-signed:
 	bash test/e2e/e2e-proxy-signed.sh
 
+## e2e-uninstall: agent uninstall challenge/approval flow
+e2e-uninstall:
+	bash test/e2e/e2e-uninstall.sh
+
 ## e2e-proxy: web-layer integrity proxy
 e2e-proxy:
 	bash test/e2e/e2e-proxy.sh

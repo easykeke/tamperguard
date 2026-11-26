@@ -864,6 +864,69 @@ function confirmDialog(options) {
   });
 }
 
+// 展示一次性的卸载挑战码（票据），带复制按钮。
+function showTicketDialog(title, code, detail) {
+  return new Promise(function (resolve) {
+    if (state.modal) {
+      const previous = state.modal;
+      state.modal = null;
+      previous.finish(false);
+    }
+    const overlay = el('div', 'modal-overlay');
+    const modal = el('div', 'modal');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.appendChild(el('h2', 'modal__title', title || '挑战码'));
+    if (detail) modal.appendChild(el('p', 'modal__detail', detail));
+    const box = el('textarea', 'mono');
+    box.readOnly = true;
+    box.rows = 4;
+    box.style.width = '100%';
+    box.value = code || '';
+    modal.appendChild(box);
+    const actions = el('div', 'modal__actions');
+    const copyBtn = button('复制挑战码', {
+      variant: 'primary',
+      onClick: function () {
+        box.select();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(box.value).then(function () {
+            toast('挑战码已复制。', 'success');
+          }, function () {});
+        }
+      },
+    });
+    const closeBtn = button('关闭', {
+      variant: 'ghost',
+      onClick: function () {
+        finish();
+      },
+    });
+    actions.append(copyBtn, closeBtn);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    box.focus();
+    let done = false;
+    function finish() {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      if (state.modal && state.modal.finish === finish) state.modal = null;
+      resolve(true);
+    }
+    function onKey(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finish();
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    state.modal = { finish: finish };
+  });
+}
+
 /* --------------------------------------------------------------------------
  * 登录 / 会话
  * ------------------------------------------------------------------------ */
@@ -1370,6 +1433,7 @@ function nodesView(options) {
   let loading = false;
   let listRefs = null;
   let filterValue = 'all';
+  let uninstallRequests = [];
 
   async function loadNodes(loadOptions) {
     const settings = loadOptions || {};
@@ -1380,13 +1444,18 @@ function nodesView(options) {
       listRefs.body.appendChild(loadingBlock('正在加载节点…'));
     }
     try {
-      const data = await api('GET', '/nodes', { signal: ac.signal });
+      const results = await Promise.all([
+        api('GET', '/nodes', { signal: ac.signal }),
+        api('GET', '/uninstall-requests?status=pending', { signal: ac.signal }).catch(function () { return []; }),
+      ]);
       if (destroyed) return;
+      const data = results[0];
       if (!Array.isArray(data)) {
         renderListError('节点接口返回格式异常（期望数组）。');
         return;
       }
       nodes = data;
+      uninstallRequests = Array.isArray(results[1]) ? results[1] : [];
       renderList();
     } catch (err) {
       if (isAborted(err) || destroyed) return;
@@ -1493,6 +1562,102 @@ function nodesView(options) {
     const wrap = el('div', 'table-wrap');
     wrap.appendChild(built.table);
     listRefs.body.appendChild(wrap);
+    renderUninstallPanel(listRefs.body);
+  }
+
+  function renderUninstallPanel(host) {
+    const section = el('section', 'card');
+    const head = el('div', 'card__head');
+    head.appendChild(el('h2', 'card__title', '卸载审批'));
+    head.appendChild(el('span', 'muted', uninstallRequests.length + ' 个待审批请求'));
+    section.appendChild(head);
+    if (!uninstallRequests.length) {
+      section.appendChild(el('p', 'muted', '当前没有客户端发起的卸载请求。管理员如需卸载某节点，可在节点详情中点击「下发卸载」。'));
+      host.appendChild(section);
+      return;
+    }
+    const built = createTable([
+      { label: '节点' },
+      { label: '原因' },
+      { label: '发起时间' },
+      { label: '操作' },
+    ]);
+    uninstallRequests.forEach(function (req) {
+      const tr = el('tr');
+      tr.appendChild(cell(textOr(req.node_id), 'mono cell-ellipsis'));
+      tr.appendChild(cell(textOr(req.reason)));
+      tr.appendChild(cell(fmtTime(req.requested_at), 'cell-nowrap'));
+      const td = el('td');
+      td.appendChild(button('批准', {
+        variant: 'primary',
+        onClick: function () { approveUninstallRequest(req); },
+      }));
+      td.appendChild(button('拒绝', {
+        variant: 'danger',
+        onClick: function () { denyUninstallRequest(req); },
+      }));
+      tr.appendChild(td);
+      built.tbody.appendChild(tr);
+    });
+    const wrap = el('div', 'table-wrap');
+    wrap.appendChild(built.table);
+    section.appendChild(wrap);
+    host.appendChild(section);
+  }
+
+  async function approveUninstallRequest(req) {
+    try {
+      const res = await api('POST', '/uninstall-requests/' + encodeURIComponent(req.id) + '/approve', { signal: ac.signal });
+      toast('已批准卸载请求。', 'success');
+      await loadNodes({ silent: true });
+      if (res && res.ticket) {
+        showTicketDialog(
+          '卸载挑战码',
+          res.ticket,
+          '已生成一次性挑战码。目标主机执行：sudo tg-agent uninstall --state-dir <状态目录> --ticket <挑战码>（10 分钟内有效）。'
+        );
+      }
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '审批失败。', 'error');
+    }
+  }
+
+  async function denyUninstallRequest(req) {
+    try {
+      await api('POST', '/uninstall-requests/' + encodeURIComponent(req.id) + '/deny', { signal: ac.signal });
+      toast('已拒绝卸载请求。', 'success');
+      loadNodes({ silent: true });
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '拒绝失败。', 'error');
+    }
+  }
+
+  async function requestNodeUninstall(node) {
+    const label = textOr(node.hostname, node.id);
+    const confirmed = await confirmDialog({
+      title: '下发卸载',
+      message: '确定从管理端卸载节点「' + label + '」的 Agent 吗？',
+      detail: '系统会生成一次性挑战码并通过推送通道下发；节点在线时自动执行卸载，否则可在主机上用该挑战码手动执行。卸载后该节点将停止防护，证书与审计数据仍保留在控制面。',
+      confirmText: '确认卸载',
+      danger: true,
+    });
+    if (!confirmed) return;
+    try {
+      const res = await api('POST', '/nodes/' + encodeURIComponent(node.id) + '/uninstall', { signal: ac.signal });
+      await loadNodes({ silent: true });
+      if (res && res.ticket) {
+        showTicketDialog(
+          '卸载挑战码已下发',
+          res.ticket,
+          '节点在线时会自动卸载；若节点离线，可在主机上执行：sudo tg-agent uninstall --state-dir <状态目录> --ticket <挑战码>。挑战码 10 分钟内有效。'
+        );
+      }
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '下发卸载失败。', 'error');
+    }
   }
 
   async function changeDegradedApproval(nodeId, approved) {
@@ -1632,6 +1797,14 @@ function nodesView(options) {
         revokeNode(node);
       },
     }));
+    if (node.role === 'protect') {
+      actions.appendChild(button('下发卸载', {
+        variant: 'danger-solid',
+        onClick: function () {
+          requestNodeUninstall(node);
+        },
+      }));
+    }
     body.appendChild(actions);
 
     body.appendChild(el('h3', 'section-title', '最近审计'));

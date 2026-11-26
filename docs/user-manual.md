@@ -337,6 +337,7 @@ curl -sk -b cookies -H 'Content-Type: application/json' \
 | 节点 | 查看执行层、degraded 原因、最近事件；审批降级；吊销节点身份 |
 | 策略 | 新建/编辑/删除；路径、模式、写入主体、分配节点 |
 | 发布 | 新建发布请求（local/pull）、查看状态、取消 |
+| 卸载审批 | 查看客户端发起的卸载请求，批准/拒绝；批准后返回一次性挑战码 |
 | 审计 | 按节点/类型/时间过滤；导出 JSONL/CSV；一键验链 |
 | 吊销 | 按令牌/主体/节点吊销，立即生效 |
 
@@ -373,6 +374,27 @@ curl -sk -b cookies 'https://<IP>:8443/api/v1/audit/verify?node_id=n_xxx'
 ---
 
 ## 9. 平台专属能力
+
+### 9.0 Agent 生命周期与防卸载
+
+管理端可以查看节点、审批降级、吊销身份、审批/下发卸载；**没有**远程重启或采集日志的通用指令通道。
+
+卸载只有两条路径，且都必须经过控制面：
+
+| 路径 | 操作 | 结果 |
+|---|---|---|
+| 管理端下发 | 节点详情 →「下发卸载」 | 控制面签发票据并推送；节点在线时自动卸载，离线时用返回的挑战码手动执行 |
+| 客户端发起 | `sudo tg-agent uninstall --reason "..."` | 生成请求并打印 `request_id`，等管理员在「卸载审批」批准后返回挑战码；客户端验签通过才执行清理 |
+| 离线主机 | `sudo tg-agent uninstall --ticket '<挑战码>'` | 直接验证管理端给的挑战码 |
+
+挑战码是 Ed25519 签名的短时票据（绑定节点、请求、nonce、10 分钟有效期），拒绝、超时或改动过的票据都不会删除任何文件：
+
+```bash
+# 只验证不删除（演练/排错）
+sudo tg-agent uninstall --state-dir /var/lib/tamperguard-agent --ticket '<挑战码>' --dry-run
+```
+
+边界：这套机制防的是"本地随意卸载"和"绕过流程卸载"，**不防 root/SYSTEM 主动对抗**（停服务、删文件仍可能发生，但会留下节点离线与审计中断痕迹）。详见 `docs/agent-lifecycle.md`。
 
 ### 9.1 RASP（Node.js）
 
@@ -510,6 +532,10 @@ sudo rm -rf /var/lib/tamperguard-agent
 | `tg-proxy` 返回 404 | 请求路径不在签名清单 | 重新发布/同步；确认 `--sync` 成功 |
 | `tg-proxy` 启动失败 `signature does not verify` | 清单被改或公钥不匹配 | 重新 `--sync`；确认 agent state 与节点一致 |
 | `--require-signed` 拒绝启动 | 用了本地快照 | 先 `--sync`，或去掉 `--require-signed`（不推荐） |
+| 卸载请求一直 pending | 管理员尚未审批 | 管理端「卸载审批」批准，或等待超时后重新发起 |
+| 挑战码无效/已过期 | 超过 10 分钟或票据被改动 | 重新发起请求或重新下发；挑战码区分大小写 |
+| 节点离线无法自动卸载 | 管控通道不可达 | 用管理端返回的挑战码在主机上执行 `--ticket` |
+| `tg-agent uninstall` 直接报错 | 未通过控制面审批 | 这是预期行为：先走管理端审批，或用管理端下发的挑战码 |
 | RASP 不生效 | 探针未加载/socket 路径不一致 | 检查 `NODE_OPTIONS` / `-javaagent` 与 `TG_RASP_SOCKET` |
 | Java 探针无拦截 | JDK 版本超出 16–21 或未加 `-Djava.security.manager=allow` | 看应用启动日志里的探针警告 |
 | fs-verity `not supported` | 内核/文件系统不支持 | 换发行版内核或跳过该层 |

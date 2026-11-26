@@ -46,6 +46,11 @@ const (
 	KindRASPBlocked  = "rasp.blocked"
 	KindRASPObserved = "rasp.observed"
 
+	KindUninstallRequested = "uninstall.requested"
+	KindUninstallApproved  = "uninstall.approved"
+	KindUninstallDenied    = "uninstall.denied"
+	KindUninstallCompleted = "uninstall.completed"
+
 	// KindTamperRestored records a write that got past the blocking layers
 	// (for example an administrator who took ownership) and was reverted from
 	// the baseline by the self-heal loop.
