@@ -171,6 +171,8 @@ const SHELL_HTML = `
           <span class="user-chip__name" id="user-name"></span>
           <span class="user-chip__role" id="user-role"></span>
         </span>
+        <button type="button" class="btn btn--sm" id="theme-btn" title="切换主题">主题</button>
+        <button type="button" class="btn btn--sm" id="password-btn">修改密码</button>
         <button type="button" class="btn btn--sm" id="logout-btn">退出登录</button>
       </div>
     </header>
@@ -928,6 +930,143 @@ function showTicketDialog(title, code, detail) {
 }
 
 /* --------------------------------------------------------------------------
+ * 主题：自动 / 白天 / 夜间
+ * ------------------------------------------------------------------------ */
+
+const THEME_KEY = 'tg-theme';
+
+function themePreference() {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (v === 'light' || v === 'dark' || v === 'auto') return v;
+  } catch (err) { /* private mode */ }
+  return 'auto';
+}
+
+function resolvedTheme(pref) {
+  if (pref === 'light' || pref === 'dark') return pref;
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function applyTheme(pref) {
+  document.documentElement.setAttribute('data-theme', resolvedTheme(pref));
+  try { localStorage.setItem(THEME_KEY, pref); } catch (err) { /* ignore */ }
+}
+
+function updateThemeButton(btn) {
+  if (!btn) return;
+  const pref = themePreference();
+  btn.textContent = pref === 'light' ? '主题：白天' : pref === 'dark' ? '主题：夜间' : '主题：自动';
+}
+
+function cycleTheme(btn) {
+  const order = ['auto', 'light', 'dark'];
+  const next = order[(order.indexOf(themePreference()) + 1) % order.length];
+  applyTheme(next);
+  updateThemeButton(btn);
+  toast('主题：' + (next === 'auto' ? '跟随系统' : next === 'light' ? '白天' : '夜间'), 'success');
+}
+
+function initTheme() {
+  applyTheme(themePreference());
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    const onChange = function () {
+      if (themePreference() === 'auto') applyTheme('auto');
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * 修改管理员密码
+ * ------------------------------------------------------------------------ */
+
+function openPasswordDialog() {
+  if (state.modal) {
+    const previous = state.modal;
+    state.modal = null;
+    previous.finish(false);
+  }
+  const overlay = el('div', 'modal-overlay');
+  const modal = el('div', 'modal');
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.appendChild(el('h2', 'modal__title', '修改管理员密码'));
+  modal.appendChild(el('p', 'modal__detail', '需要验证当前密码；新密码至少 8 位。'));
+
+  function field(labelText, id, autocomplete) {
+    const label = el('label', 'field');
+    label.appendChild(el('span', '', labelText));
+    const input = el('input', '');
+    input.type = 'password';
+    input.id = id;
+    input.autocomplete = autocomplete || 'off';
+    label.appendChild(input);
+    modal.appendChild(label);
+    return input;
+  }
+
+  const current = field('当前密码', 'pw-current', 'current-password');
+  const next = field('新密码', 'pw-new', 'new-password');
+  const confirm = field('确认新密码', 'pw-confirm', 'new-password');
+
+  const actions = el('div', 'modal__actions');
+  const cancelBtn = button('取消', {
+    variant: 'ghost',
+    onClick: function () { finish(false); },
+  });
+  const saveBtn = button('保存', {
+    variant: 'primary',
+    onClick: async function () {
+      if (next.value.length < 8) {
+        toast('新密码至少 8 位。', 'error');
+        return;
+      }
+      if (next.value !== confirm.value) {
+        toast('两次输入的新密码不一致。', 'error');
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        await api('POST', '/auth/password', {
+          body: { current_password: current.value, new_password: next.value },
+        });
+        toast('管理员密码已修改。', 'success');
+        finish(true);
+      } catch (err) {
+        saveBtn.disabled = false;
+        if (isAborted(err) || err.handled) return;
+        toast(err.message || '修改密码失败。', 'error');
+      }
+    },
+  });
+  actions.append(cancelBtn, saveBtn);
+  modal.appendChild(actions);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  current.focus();
+
+  let done = false;
+  function finish() {
+    if (done) return;
+    done = true;
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+    if (state.modal && state.modal.finish === finish) state.modal = null;
+  }
+  function onKey(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      finish();
+    }
+  }
+  document.addEventListener('keydown', onKey);
+  state.modal = { finish: finish };
+}
+
+/* --------------------------------------------------------------------------
  * 登录 / 会话
  * ------------------------------------------------------------------------ */
 
@@ -1061,6 +1200,13 @@ function renderShell(route) {
     buildSidebar(app.querySelector('#nav'));
     const logoutBtn = app.querySelector('#logout-btn');
     if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
+    const themeBtn = app.querySelector('#theme-btn');
+    if (themeBtn) {
+      updateThemeButton(themeBtn);
+      themeBtn.addEventListener('click', function () { cycleTheme(themeBtn); });
+    }
+    const passwordBtn = app.querySelector('#password-btn');
+    if (passwordBtn) passwordBtn.addEventListener('click', openPasswordDialog);
   }
 
   const activeKey = NAV_ACTIVE_MAP[route.name] || '';
@@ -1524,6 +1670,20 @@ function nodesView(options) {
     const deg = degradedInfo(node);
     tr.appendChild(cellNode(badge(deg.label, deg.tone)));
 
+    const actionTd = el('td');
+    if (node.role === 'protect') {
+      actionTd.appendChild(button('卸载', {
+        variant: 'danger',
+        onClick: function (event) {
+          if (event) event.stopPropagation();
+          requestNodeUninstall(node);
+        },
+      }));
+    } else {
+      actionTd.appendChild(el('span', 'muted', '—'));
+    }
+    tr.appendChild(actionTd);
+
     tr.addEventListener('click', openDetail);
     tr.addEventListener('keydown', function (event) {
       if (event.key === 'Enter' || event.key === ' ') {
@@ -1555,6 +1715,7 @@ function nodesView(options) {
       { label: '策略版本' },
       { label: '最后心跳' },
       { label: '降级状态' },
+      { label: '操作' },
     ]);
     list.forEach(function (node) {
       built.tbody.appendChild(nodeRow(node));
@@ -1697,8 +1858,9 @@ function nodesView(options) {
   }
 
   function renderNodeDetail(drawer, detail) {
-    const node = detail && typeof detail === 'object' ? detail : {};
-    const recentAudit = Array.isArray(detail.recent_audit) ? detail.recent_audit : [];
+    const payload = detail && typeof detail === 'object' ? detail : {};
+    const node = payload.node && typeof payload.node === 'object' ? payload.node : payload;
+    const recentAudit = Array.isArray(payload.recent_audit) ? payload.recent_audit : [];
     drawer.setTitle('节点 ' + textOr(node.hostname, node.id), textOr(node.id, ''));
     const body = drawer.body;
     clear(body);
@@ -3611,6 +3773,7 @@ function onUnhandledRejection(event) {
 }
 
 async function boot() {
+  initTheme();
   window.addEventListener('hashchange', function () {
     handleRoute().catch(onRouteError);
   });

@@ -63,6 +63,7 @@ Two independent authentication schemes share one listener:
 | GET | `/healthz` | — | `{"status":"ok","version":"0.2.2"}` |
 | POST | `/auth/login` | `{"username","password"}` | Sets cookie, returns `{"username","role"}` |
 | POST | `/auth/logout` | — | Clears cookie |
+| POST | `/auth/password` | `{"current_password","new_password"}` | 修改管理员密码（需登录，验证当前密码，新密码 ≥8 位）；写入 server.json 立即生效 |
 | GET | `/auth/me` | — | 200 with user, 401 if absent |
 | POST | `/agent/enroll` | `{"bootstrap_token","hostname","role","csr_pem","agent_version"}` | Returns `{"agent_id","cert_pem","ca_pem","server_time","config":{"issuer_public_key","policy_public_key"}}` |
 

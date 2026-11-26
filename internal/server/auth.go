@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/easykeke/tamperguard/internal/config"
 )
 
 const (
@@ -26,6 +28,16 @@ type userResponse struct {
 	Role     string `json:"role"`
 }
 
+// currentPasswordHash prefers the hash persisted on disk, so a break-glass
+// `tg-server reset-admin-password` takes effect immediately while the service is
+// running. The in-memory value is the fallback when the file is unreadable.
+func (s *Server) currentPasswordHash() string {
+	if cfg, err := config.LoadServer(s.cfg.DataDir); err == nil && cfg.AdminPasswordHash != "" {
+		return cfg.AdminPasswordHash
+	}
+	return s.cfg.AdminPasswordHash
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if !decodeJSON(w, r, &req) {
@@ -34,7 +46,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Always run a full KDF, even for unknown users, so that response time
 	// does not reveal whether the account exists.
 	validUser := hmac.Equal([]byte(req.Username), []byte(s.authUser()))
-	hash := s.cfg.AdminPasswordHash
+	hash := s.currentPasswordHash()
 	if !validUser {
 		hash = dummyHash
 	}
@@ -62,6 +74,40 @@ func (s *Server) authUser() string {
 		return "admin"
 	}
 	return s.cfg.AdminUser
+}
+
+// handleChangePassword lets a signed-in administrator rotate the password. The
+// current password is required even though the session is authenticated, so a
+// hijacked browser tab cannot lock the operator out.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if !VerifyPassword(s.currentPasswordHash(), in.CurrentPassword) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized", "current password is incorrect")
+		return
+	}
+	if len(in.NewPassword) < 8 {
+		writeErr(w, http.StatusBadRequest, "invalid", "new password must be at least 8 characters")
+		return
+	}
+	hash, err := HashPassword(in.NewPassword)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	s.cfg.AdminPasswordHash = hash
+	if err := config.SaveServer(s.cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "persist config: "+err.Error())
+		return
+	}
+	user, _ := s.sessionUser(r)
+	s.log.Warn("admin password changed", "user", user, "remote", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "changed"})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

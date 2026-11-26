@@ -12,6 +12,10 @@
 
 - **TPM AK 自动签发**：`tg-agent enroll --tpm-auto-ak --tpm-tcti ...` 自动创建 EK/AK、导出公钥登记到控制面，AK 上下文与 TCTI 存入 agent.json，运行时无需再传参数。swtpm 端到端通过。
 
+- **管理端修复与增强**：修复节点详情接口返回 `{node,recent_audit}` 而前端把整个对象当节点渲染、导致详情字段全为 `—`、降级审批与卸载按钮缺失的问题；节点列表新增「操作」列可直接下发卸载。
+- **管理员密码管理**：新增 `POST /api/v1/auth/password`（登录态 + 验证当前密码）与 `tg-server reset-admin-password`（break-glass，写入后立即生效，无需重启）；控制面登录改为读取磁盘哈希，CLI 重置即时可用。
+- **自适应主题**：顶栏切换 自动/白天/夜间，自动模式跟随系统 `prefers-color-scheme`，偏好保存在 localStorage；新增完整浅色主题变量与组件覆盖。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。

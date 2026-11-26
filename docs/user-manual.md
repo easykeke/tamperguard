@@ -343,7 +343,8 @@ curl -sk -b cookies -H 'Content-Type: application/json' \
 
 常见操作：
 
-- **改密码**：右上角账号菜单；
+- **改密码**：右上角「修改密码」，需验证当前密码，新密码至少 8 位；忘记密码时在控制面主机执行 `tg-server reset-admin-password --data-dir /var/lib/tamperguard`（随机生成并打印，立即生效，无需重启）。
+- **主题**：顶栏「主题」按钮在 自动 / 白天 / 夜间 之间切换，偏好保存在浏览器本地；自动模式跟随操作系统。
 - **确认节点是否真的在阻断**：节点页「执行层」必须是 `ebpf-lsm` 或 `windows-acl`；`observe` 表示只记录；
 - **降级审批**：节点上报 degraded 后，需要管理员在节点页显式批准才会被接受（防止静默降级）。
 

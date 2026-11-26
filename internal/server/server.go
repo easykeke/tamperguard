@@ -187,6 +187,7 @@ func (s *Server) routes() {
 
 	m.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	m.Handle("POST /api/v1/auth/logout", s.admin(s.handleLogout))
+	m.Handle("POST /api/v1/auth/password", s.admin(s.handleChangePassword))
 	m.Handle("GET /api/v1/auth/me", s.admin(s.handleMe))
 
 	m.HandleFunc("POST /api/v1/agent/enroll", s.handleEnroll)

@@ -54,6 +54,8 @@ func main() {
 		err = cmdServe(os.Args[2:])
 	case "bootstrap-token":
 		err = cmdBootstrapToken(os.Args[2:])
+	case "reset-admin-password":
+		err = cmdResetPassword(os.Args[2:])
 	case "release":
 		err = cmdRelease(os.Args[2:])
 	case "-h", "--help", "help":
@@ -77,6 +79,7 @@ func usage() {
   tg-server serve [--data-dir DIR]
   tg-server bootstrap-token [--data-dir DIR] [--role protect|publish]
   tg-server release --data-dir DIR --binary PATH --version V [--os linux] [--arch amd64]
+  tg-server reset-admin-password [--data-dir DIR] [--password NEW]
 `)
 }
 
@@ -244,6 +247,37 @@ func cmdBootstrapToken(args []string) error {
 		return err
 	}
 	fmt.Printf("bootstrap token (%s role, valid for one use): %s\n", *role, tok)
+	return nil
+}
+
+// cmdResetPassword resets the administrator password from the host (break-glass
+// path when the console password is lost). A random password is generated and
+// printed when --password is omitted.
+func cmdResetPassword(args []string) error {
+	fs := flag.NewFlagSet("reset-admin-password", flag.ExitOnError)
+	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	password := fs.String("password", "", "new password (empty generates a random one)")
+	_ = fs.Parse(args)
+	cfg, err := config.LoadServer(*dataDir)
+	if err != nil {
+		return err
+	}
+	pw := *password
+	if pw == "" {
+		pw = idgen.Token(9)
+	}
+	if len(pw) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+	hash, err := server.HashPassword(pw)
+	if err != nil {
+		return err
+	}
+	cfg.AdminPasswordHash = hash
+	if err := config.SaveServer(cfg); err != nil {
+		return err
+	}
+	fmt.Printf("admin password reset\n  user:     %s\n  password: %s\n", cfg.AdminUser, pw)
 	return nil
 }
 
