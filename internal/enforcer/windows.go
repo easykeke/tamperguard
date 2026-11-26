@@ -230,13 +230,15 @@ func (w *WindowsACL) Update(rt Runtime) error {
 	}
 	w.mu.Unlock()
 
+	// Persist the roots even when some checks failed: `unlock` must be able to
+	// clean up whatever was applied.
+	if err := w.saveRoots(applied); err != nil {
+		w.log.Warn("windows-acl: cannot persist applied roots", "err", err)
+	}
 	if len(allErrs) > 0 {
 		w.log.Error("windows-acl: some paths could not be locked", "errors", strings.Join(allErrs, "; "))
 		w.events.Emit(Event{Time: now, Kind: audit.KindEnforcerError, Reason: strings.Join(allErrs, "; ")})
 		return nil
-	}
-	if err := w.saveRoots(applied); err != nil {
-		w.log.Warn("windows-acl: cannot persist applied roots", "err", err)
 	}
 	w.events.Emit(Event{Time: now, Kind: audit.KindPolicyApplied, Reason: fmt.Sprintf("acl applied to %d paths", len(applied))})
 	return nil

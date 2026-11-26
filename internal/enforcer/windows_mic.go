@@ -92,21 +92,25 @@ func setIntegrity(path string, level integrityLevel, inherit bool) error {
 		levelName(level), path, nativeErr, err, string(out))
 }
 
-// applySACL converts an SDDL SACL and applies it with SetFileSecurityW.
+// applySACL converts an SDDL SACL, extracts the ACL and sets it through
+// SetNamedSecurityInfo. SetFileSecurityW accepted the same descriptor but left an
+// empty SACL behind, so the ACL is applied explicitly instead.
 func applySACL(path string, sddl string) error {
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
 		return fmt.Errorf("SDDL %q: %w", sddl, err)
 	}
-	pathPtr, err := windows.UTF16PtrFromString(path)
+	sacl, _, err := sd.SACL()
 	if err != nil {
-		return err
+		return fmt.Errorf("SDDL SACL %q: %w", sddl, err)
 	}
-	info := uint32(windows.SACL_SECURITY_INFORMATION)
-	r, _, callErr := procSetFileSecurity.Call(
-		uintptr(unsafe.Pointer(pathPtr)), uintptr(info), uintptr(unsafe.Pointer(sd)))
-	if r == 0 {
-		return fmt.Errorf("SetFileSecurityW: %w", callErr)
+	if sacl == nil || sacl.AceCount == 0 {
+		return fmt.Errorf("SDDL %q produced an empty SACL", sddl)
+	}
+	info := windows.SECURITY_INFORMATION(windows.SACL_SECURITY_INFORMATION)
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, info,
+		nil, nil, nil, sacl); err != nil {
+		return fmt.Errorf("SetNamedSecurityInfo(SACL): %w", err)
 	}
 	return nil
 }
