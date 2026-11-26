@@ -111,6 +111,9 @@ type EBPF struct {
 // reader. Any failure closes what was already loaded, so a partially attached
 // control never looks healthy.
 func NewEBPF(publisherUIDs []int) (*EBPF, error) {
+	if !bpfLSMActive() {
+		return nil, errors.New("ebpf: bpf LSM is not active (kernel command line needs lsm=...,bpf)")
+	}
 	if err := rlimit.RemoveMemlock(); err != nil {
 		// Not fatal on kernels with memcg accounting, but worth knowing.
 		slog.Default().Debug("enforcer: could not raise memlock limit", "err", err)

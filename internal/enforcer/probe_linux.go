@@ -26,6 +26,28 @@ func ensureSecurityFS() {
 	_ = unix.Mount("securityfs", "/sys/kernel/security", "securityfs", 0, "")
 }
 
+// lsmHasBPF reports whether "bpf" is present in an active-LSM list file. A
+// kernel with CONFIG_BPF_LSM but without bpf on the LSM stack accepts link
+// creation yet never calls the hooks, so this check is mandatory before the
+// backend may claim synchronous enforcement.
+func lsmHasBPF(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, part := range strings.Split(string(raw), ",") {
+		if strings.TrimSpace(part) == "bpf" {
+			return true
+		}
+	}
+	return false
+}
+
+func bpfLSMActive() bool {
+	ensureSecurityFS()
+	return lsmHasBPF("/sys/kernel/security/lsm")
+}
+
 // Probe inspects the host and reports which backend Select would pick, and why
 // the stronger ones are unavailable. It actually loads and attaches the eBPF
 // programs and initialises fanotify, so a node can be checked before rollout.
@@ -53,12 +75,7 @@ func Probe(stateDir string) ProbeReport {
 	} else {
 		rep.FSVerity = "unavailable: " + st.Reason
 	}
-	rep.LSMHasBPF = false
-	for _, part := range strings.Split(rep.LSMActive, ",") {
-		if strings.TrimSpace(part) == "bpf" {
-			rep.LSMHasBPF = true
-		}
-	}
+	rep.LSMHasBPF = lsmHasBPF("/sys/kernel/security/lsm")
 	if _, err := os.Stat("/sys/kernel/btf/vmlinux"); err == nil {
 		rep.HasBTF = true
 	}
@@ -69,7 +86,9 @@ func Probe(stateDir string) ProbeReport {
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer slog.SetDefault(prev)
 
-	if e, err := NewEBPF(nil); err == nil {
+	if !rep.LSMHasBPF {
+		rep.BPFLoadError = "bpf is not in the active LSM stack; add lsm=...,bpf to the kernel command line and reboot (the kernel otherwise accepts the link but never calls the hooks)"
+	} else if e, err := NewEBPF(nil); err == nil {
 		_ = e.Close()
 		rep.Selected = "ebpf-lsm"
 		return rep

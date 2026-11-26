@@ -12,7 +12,10 @@ import (
 // Order: eBPF LSM (synchronous blocking) -> fanotify (detect and restore) ->
 // nil, which makes Select fall back to the observe-only simulator.
 func platformEnforcer(opts Options) Enforcer {
-	if e, err := NewEBPF(opts.PublisherUIDs); err == nil {
+	if !bpfLSMActive() {
+		slog.Default().Warn("bpf LSM is not active; using fanotify (degraded)",
+			"hint", "add lsm=...,bpf to the kernel command line and reboot")
+	} else if e, err := NewEBPF(opts.PublisherUIDs); err == nil {
 		return e
 	} else {
 		slog.Default().Warn("eBPF LSM backend unavailable, trying fanotify", "err", err)
