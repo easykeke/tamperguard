@@ -54,6 +54,8 @@ const ROUTE_TITLES = {
 const NODE_STATUS_META = {
   online: { label: '在线', tone: 'ok' },
   offline: { label: '离线', tone: 'muted' },
+  uninstalling: { label: '卸载中', tone: 'warn' },
+  uninstalled: { label: '已卸载', tone: 'muted' },
 };
 
 const ENFORCER_LABELS = {
@@ -1703,6 +1705,11 @@ function nodesView(options) {
     if (filterValue === 'offline') {
       return list.filter(function (node) { return node && node.status === 'offline'; });
     }
+    if (filterValue === 'uninstalled') {
+      return list.filter(function (node) {
+        return node && (node.status === 'uninstalled' || node.status === 'uninstalling');
+      });
+    }
     return list;
   }
 
@@ -1741,7 +1748,7 @@ function nodesView(options) {
     tr.appendChild(cellNode(badge(deg.label, deg.tone)));
 
     const actionTd = el('td');
-    if (node.role === 'protect') {
+    if (node.role === 'protect' && node.status !== 'uninstalled' && node.status !== 'uninstalling') {
       actionTd.appendChild(button('卸载', {
         variant: 'danger',
         onClick: function (event) {
@@ -1749,7 +1756,17 @@ function nodesView(options) {
           requestNodeUninstall(node);
         },
       }));
-    } else {
+    }
+    if (node.status === 'offline' || node.status === 'uninstalled') {
+      actionTd.appendChild(button('删除', {
+        variant: 'ghost',
+        onClick: function (event) {
+          if (event) event.stopPropagation();
+          purgeNode(node);
+        },
+      }));
+    }
+    if (!actionTd.childNodes.length) {
       actionTd.appendChild(el('span', 'muted', '—'));
     }
     tr.appendChild(actionTd);
@@ -1981,6 +1998,56 @@ function nodesView(options) {
       if (isAborted(err) || err.handled) return;
       toast(err.message || '下发卸载失败。', 'error');
     }
+  }
+
+  async function purgeNode(node) {
+    const label = textOr(node.hostname, node.id);
+    const confirmed = await confirmDialog({
+      title: '删除节点',
+      message: '从管理端删除节点「' + label + '」的记录？',
+      detail: '仅删除控制面的节点记录与策略绑定；该节点当前已离线或已卸载，不会再上报。历史审计与卸载记录保留。',
+      confirmText: '删除记录',
+      danger: true,
+    });
+    if (!confirmed) return;
+    try {
+      await api('DELETE', '/nodes/' + encodeURIComponent(node.id) + '/record', { signal: ac.signal });
+      toast('节点记录已删除。', 'success');
+      await loadNodes({ silent: true });
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '删除节点失败。', 'error');
+    }
+  }
+
+  async function purgeStaleNodes() {
+    const stale = (Array.isArray(nodes) ? nodes : []).filter(function (n) {
+      return n && (n.status === 'offline' || n.status === 'uninstalled');
+    });
+    if (!stale.length) {
+      toast('没有可清理的离线或已卸载节点。', 'info');
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: '批量清理节点',
+      message: '删除 ' + stale.length + ' 个离线/已卸载节点的记录？',
+      detail: '仅删除控制面记录与策略绑定，历史审计保留。在线节点不会被删除。',
+      confirmText: '全部删除',
+      danger: true,
+    });
+    if (!confirmed) return;
+    let failed = 0;
+    for (const node of stale) {
+      try {
+        await api('DELETE', '/nodes/' + encodeURIComponent(node.id) + '/record', { signal: ac.signal });
+      } catch (err) {
+        if (isAborted(err)) return;
+        failed += 1;
+      }
+    }
+    toast(failed ? ('已清理 ' + (stale.length - failed) + ' 个，失败 ' + failed + ' 个。') : ('已清理 ' + stale.length + ' 个节点。'),
+      failed ? 'error' : 'success');
+    await loadNodes({ silent: true });
   }
 
   async function changeDegradedApproval(nodeId, approved) {
@@ -2226,6 +2293,7 @@ function nodesView(options) {
         { value: 'all', label: '全部状态' },
         { value: 'online', label: '仅在线' },
         { value: 'offline', label: '仅离线' },
+        { value: 'uninstalled', label: '已卸载' },
         { value: 'degraded', label: '降级未审批' },
       ].forEach(function (option) {
         const node = el('option', null, option.label);
@@ -2242,6 +2310,7 @@ function nodesView(options) {
         desc: '节点心跳、防护模式与降级审批',
         actions: [
           filter,
+          button('清理离线/已卸载', { onClick: function () { purgeStaleNodes(); } }),
           button('刷新', { onClick: function () { loadNodes(); } }),
         ],
       }));

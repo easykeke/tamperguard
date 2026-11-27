@@ -285,6 +285,9 @@ func (a *Agent) handleRemoteUninstall(data []byte) {
 		UnitPath:    unit,
 		ServiceName: service,
 	}
+	if err := a.client.CompleteUninstall(context.Background(), tk.RequestID); err != nil {
+		a.log.Warn("could not report uninstall completion", "err", err)
+	}
 	if err := uninstall.SpawnDetached(opts); err != nil {
 		a.log.Error("cannot schedule uninstall cleanup", "err", err)
 		return

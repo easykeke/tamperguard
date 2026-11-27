@@ -353,6 +353,12 @@ func (c *Client) GetUninstallStatus(ctx context.Context, id string) (*UninstallS
 	return &out, nil
 }
 
+// CompleteUninstall tells the control plane that the agent has removed itself.
+func (c *Client) CompleteUninstall(ctx context.Context, requestID string) error {
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/uninstall/"+requestID+"/complete",
+		map[string]string{}, nil)
+}
+
 // VerifyUninstallTicket checks the control-plane signature, the target node and
 // (when nonce is not empty) the request nonce.
 func (c *Client) VerifyUninstallTicket(encoded, nodeID, nonce string) (*uninstall.Ticket, error) {

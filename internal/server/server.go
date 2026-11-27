@@ -201,6 +201,7 @@ func (s *Server) routes() {
 	m.Handle("POST /api/v1/agent/attest", s.agent("protect", s.handleAttestation))
 	m.Handle("POST /api/v1/agent/uninstall/request", s.agent("protect", s.handleUninstallRequest))
 	m.Handle("GET /api/v1/agent/uninstall/{id}", s.agent("protect", s.handleUninstallStatus))
+	m.Handle("POST /api/v1/agent/uninstall/{id}/complete", s.agent("protect", s.handleUninstallComplete))
 
 	m.Handle("GET /api/v1/overview", s.admin(s.handleOverview))
 
@@ -212,6 +213,7 @@ func (s *Server) routes() {
 	m.Handle("POST /api/v1/nodes/{id}/degraded-approval", s.admin(s.handleDegradedApproval))
 	m.Handle("DELETE /api/v1/nodes/{id}", s.admin(s.handleRevokeNode))
 	m.Handle("POST /api/v1/nodes/{id}/uninstall", s.admin(s.handleNodeUninstall))
+	m.Handle("DELETE /api/v1/nodes/{id}/record", s.admin(s.handlePurgeNode))
 
 	m.Handle("GET /api/v1/policies", s.admin(s.handleListPolicies))
 	m.Handle("POST /api/v1/policies", s.admin(s.handleCreatePolicy))

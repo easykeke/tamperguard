@@ -27,10 +27,11 @@ const ticketVersion = "tg-uninstall-ticket-v1"
 
 // Status values of an uninstall request.
 const (
-	StatusPending  = "pending"
-	StatusApproved = "approved"
-	StatusDenied   = "denied"
-	StatusDone     = "done"
+	StatusPending   = "pending"
+	StatusApproved  = "approved"
+	StatusCompleted = "completed"
+	StatusDenied    = "denied"
+	StatusDone      = "done"
 )
 
 // Options describes what an uninstall removes.

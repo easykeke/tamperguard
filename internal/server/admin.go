@@ -34,6 +34,9 @@ func (s *Server) decorateNode(n store.Node) store.Node {
 	if n.Role == "" {
 		n.Role = "protect"
 	}
+	if n.Status == "uninstalled" || n.Status == "uninstalling" {
+		return n
+	}
 	window := int64(3 * s.cfg.HeartbeatSeconds)
 	if n.Role == "protect" && s.now().Unix()-n.LastSeen > window {
 		n.Status = "offline"
@@ -567,4 +570,31 @@ func parseEd25519Public(pemText string) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("unexpected key type %T", k)
 	}
 	return pub, nil
+}
+
+// handlePurgeNode removes an offline/uninstalled node record from the console.
+// Online nodes must be uninstalled or revoked first.
+func (s *Server) handlePurgeNode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	n, err := s.st.GetNode(id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "node not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	n = s.decorateNode(n)
+	if n.Status == "online" {
+		writeErr(w, http.StatusConflict, "conflict", "node is online; revoke or uninstall it first")
+		return
+	}
+	if err := s.st.PurgeNode(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	user, _ := s.sessionUser(r)
+	s.log.Warn("node record purged", "node", id, "by", user)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

@@ -86,6 +86,7 @@ Two independent authentication schemes share one listener:
 | GET | `/nodes/{id}` | — | Node + `recent_audit` (last 20 records) |
 | POST | `/nodes/{id}/degraded-approval` | `{"approved": true}` | Admin explicitly accepts degraded protection |
 | DELETE | `/nodes/{id}` | — | Revokes the node identity (certs rejected afterwards) |
+| DELETE | `/nodes/{id}/record` | — | 删除节点记录（仅离线/已卸载；在线返回 409） |
 
 ### Policies
 | Method | Path | Body |
@@ -160,6 +161,7 @@ write and retries on `EPERM` while the token is valid.
 | POST | `/agent/grants` | `{"active_tokens":["tok_..."]}` | Agent reports which grants it actually installed; used by the publisher readiness check |
 | POST | `/agent/uninstall/request` | protect 角色 mTLS | `{nonce,reason}` → `{request_id,status}`：客户端发起卸载请求，等待管理员审批 |
 | GET | `/agent/uninstall/{id}` | protect 角色 mTLS | `{request_id,status,ticket}`：审批结果；批准后返回一次性挑战码 |
+| POST | `/agent/uninstall/{id}/complete` | protect 角色 mTLS | 上报已执行卸载；节点状态变为 `uninstalled` |
 | GET | `/uninstall-requests` | — | 待审批/历史卸载请求列表 |
 | POST | `/uninstall-requests/{id}/approve` | — | 批准并返回挑战码（10 分钟有效） |
 | POST | `/uninstall-requests/{id}/deny` | — | 拒绝卸载请求 |

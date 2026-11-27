@@ -107,6 +107,7 @@ func (s *Server) approveUninstall(req store.UninstallRequest, by string) (string
 	if err := s.st.DecideUninstall(req.ID, uninstall.StatusApproved, enc, by); err != nil {
 		return "", err
 	}
+	_ = s.st.SetNodeStatus(req.NodeID, "uninstalling")
 	payload, _ := json.Marshal(map[string]string{"ticket": enc})
 	s.hub.Publish(req.NodeID, Event{
 		Kind:    EventUninstall,
@@ -217,4 +218,32 @@ func (s *Server) handleNodeUninstall(w http.ResponseWriter, r *http.Request) {
 		"status":     uninstall.StatusApproved,
 		"ticket":     ticket,
 	})
+}
+
+// handleUninstallComplete lets the agent report that it has removed itself.
+func (s *Server) handleUninstallComplete(w http.ResponseWriter, r *http.Request) {
+	nodeID, _ := clientCN(r)
+	req, err := s.st.GetUninstallRequest(r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "uninstall request not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if req.NodeID != nodeID {
+		writeErr(w, http.StatusForbidden, "forbidden", "request belongs to another node")
+		return
+	}
+	if err := s.st.CompleteUninstallRequest(req.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if err := s.st.SetNodeStatus(nodeID, "uninstalled"); err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	s.log.Warn("agent reported uninstall complete", "node", nodeID, "request", req.ID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "uninstalled"})
 }

@@ -1464,3 +1464,42 @@ func (s *Store) UnassignPolicy(nodeID string) error {
 	_, err := s.db.Exec(`UPDATE nodes SET policy_id='' WHERE id=?`, nodeID)
 	return err
 }
+
+// SetNodeStatus records a lifecycle status such as uninstalling/uninstalled.
+func (s *Store) SetNodeStatus(id, status string) error {
+	res, err := s.db.Exec(`UPDATE nodes SET status=? WHERE id=?`, status, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CompleteUninstallRequest marks an approved request as completed.
+func (s *Store) CompleteUninstallRequest(id string) error {
+	_, err := s.db.Exec(`UPDATE uninstall_requests SET status='completed' WHERE id=?`, id)
+	return err
+}
+
+// PurgeNode removes a node record and its policy assignment. It is only used
+// for nodes that are already offline or uninstalled.
+func (s *Store) PurgeNode(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM node_policy WHERE node_id=?`, id); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`DELETE FROM nodes WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
+}
