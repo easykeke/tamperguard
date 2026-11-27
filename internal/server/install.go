@@ -198,6 +198,17 @@ if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
 }
 
 New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+
+# Kill any old agent/publisher/GUI first: Windows reports "access denied" when
+# overwriting a running executable. Then take the directory back from the old
+# hardened ACL (Administrators need write access for this upgrade).
+Write-Host "stopping old TamperGuard processes..." -ForegroundColor Yellow
+Get-Process tg-agent,tg-publish,tg-agent-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+takeown /f "$agentDir" /r /d y 2>$null | Out-Null
+icacls "$agentDir" /reset /T /C 2>$null | Out-Null
+icacls "$agentDir" /grant "*S-1-5-32-544:(OI)(CI)F" "SYSTEM:(OI)(CI)F" /T /C 2>$null | Out-Null
+
 $files = @('tg-agent.exe','tg-publish.exe','tg-agent-gui.exe','install-service.ps1','verify-hardening.ps1','ca.crt')
 function Copy-Binaries {
     foreach ($f in $files) {
@@ -214,32 +225,54 @@ function Copy-Binaries {
 }
 
 if (-not (Copy-Binaries)) {
-    Write-Host "program directory is hardened; reclaiming it as SYSTEM..." -ForegroundColor Yellow
+    Write-Host "program directory is in use or hardened; reclaiming as SYSTEM..." -ForegroundColor Yellow
     $prep = 'C:\Windows\Temp\tg-prep.cmd'
+    $done = 'C:\Windows\Temp\tg-prep.done'
+    Remove-Item $done -Force -ErrorAction SilentlyContinue
     $prepBody = @'
 @echo off
 sc stop TamperGuardWatchdog >nul 2>&1
 sc stop TamperGuardAgent >nul 2>&1
 sc stop TamperGuardPublish >nul 2>&1
+timeout /t 3 /nobreak >nul
+taskkill /f /im tg-agent.exe >nul 2>&1
+taskkill /f /im tg-publish.exe >nul 2>&1
+taskkill /f /im tg-agent-gui.exe >nul 2>&1
 timeout /t 2 /nobreak >nul
 takeown /f "__AGENTDIR__" /r /d y >nul 2>&1
-icacls "__AGENTDIR__" /grant "*S-1-5-32-544:(OI)(CI)F" /T >nul 2>&1
+icacls "__AGENTDIR__" /reset /T /C >nul 2>&1
+icacls "__AGENTDIR__" /grant "*S-1-5-32-544:(OI)(CI)F" "SYSTEM:(OI)(CI)F" /T /C >nul 2>&1
 if exist "__STATE__" (
   takeown /f "__STATE__" /r /d y >nul 2>&1
-  icacls "__STATE__" /grant "*S-1-5-32-544:(OI)(CI)F" /T >nul 2>&1
+  icacls "__STATE__" /reset /T /C >nul 2>&1
+  icacls "__STATE__" /grant "*S-1-5-32-544:(OI)(CI)F" "SYSTEM:(OI)(CI)F" /T /C >nul 2>&1
 )
+echo done > "C:\Windows\Temp\tg-prep.done"
 '@
     $prepBody = $prepBody.Replace('__AGENTDIR__', $agentDir).Replace('__STATE__', $State)
     Set-Content -LiteralPath $prep -Value $prepBody -Encoding ASCII
-    $taskArgs = '/Create /TN TamperGuardPrep /TR C:\Windows\Temp\tg-prep.cmd /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F'
+    $taskArgs = '/Create /TN TamperGuardPrep /TR C:\Windows\Temp\tg-prep.cmd /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F'
     $create = Start-Process -FilePath schtasks.exe -ArgumentList $taskArgs -Wait -PassThru -WindowStyle Hidden
-    if ($create.ExitCode -eq 0) {
+    if ($create.ExitCode -ne 0) {
+        Write-Host "warning: could not create the reclaim task (exit $($create.ExitCode))" -ForegroundColor Yellow
+    } else {
         Start-Process -FilePath schtasks.exe -ArgumentList '/Run /TN TamperGuardPrep' -Wait -WindowStyle Hidden | Out-Null
-        Start-Sleep -Seconds 7
+        for ($i = 0; $i -lt 25; $i++) {
+            if (Test-Path $done) { break }
+            Start-Sleep -Seconds 1
+        }
         Start-Process -FilePath schtasks.exe -ArgumentList '/Delete /TN TamperGuardPrep /F' -Wait -WindowStyle Hidden | Out-Null
+        if (-not (Test-Path $done)) {
+            Write-Host "warning: reclaim task did not finish in time; trying to copy anyway" -ForegroundColor Yellow
+        }
     }
+    Start-Sleep -Seconds 2
     if (-not (Copy-Binaries)) {
-        throw "cannot write to $agentDir even after reclaim; close any running agent and retry"
+        Write-Host "diagnostics:" -ForegroundColor Yellow
+        icacls $agentDir
+        Get-Process tg-agent,tg-publish,tg-agent-gui -ErrorAction SilentlyContinue |
+            Select-Object Id,ProcessName,Path | Format-Table | Out-String | Write-Host
+        throw "cannot write to $agentDir; stop tg-agent.exe/tg-publish.exe (or the TamperGuard services) and retry"
     }
 }
 
