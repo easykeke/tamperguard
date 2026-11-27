@@ -116,11 +116,18 @@ echo done > "__DONE__"
 }
 
 function Start-ServiceAsSystem([string]$name) {
-    sc.exe start $name | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "WARN: sc start $name failed (exit $LASTEXITCODE)" -ForegroundColor Yellow
+    $taskName = 'TGStart_' + $name
+    $taskArgs = '/Create /TN ' + $taskName + ' /TR "sc.exe start ' + $name + '" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F'
+    $create = Start-Process -FilePath schtasks.exe -ArgumentList $taskArgs -Wait -PassThru -WindowStyle Hidden
+    if ($create.ExitCode -ne 0) {
+        Write-Host "WARN: could not create start task for $name (exit $($create.ExitCode)); trying sc start" -ForegroundColor Yellow
+        sc.exe start $name | Out-Null
+        Start-Sleep -Seconds 2
+        return
     }
-    Start-Sleep -Seconds 2
+    Start-Process -FilePath schtasks.exe -ArgumentList ('/Run /TN ' + $taskName) -Wait -WindowStyle Hidden | Out-Null
+    Start-Sleep -Seconds 6
+    Start-Process -FilePath schtasks.exe -ArgumentList ('/Delete /TN ' + $taskName + ' /F') -Wait -WindowStyle Hidden | Out-Null
 }
 
 function Install-Service([string]$name, [string]$display, [string]$binPath) {
@@ -131,6 +138,19 @@ function Install-Service([string]$name, [string]$display, [string]$binPath) {
         # Configure through the registry: Administrators can write it even when
         # the service ACL denies SERVICE_CHANGE_CONFIG.
         $svcKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$name"
+        if (-not (Test-Path $svcKey)) {
+            # The uninstaller removes the registry key while SCM may still cache
+            # the service entry until reboot. Recreate the key so configuration
+            # does not fail with a missing-path error.
+            Write-Host "service $name registry key is missing; recreating it" -ForegroundColor Yellow
+            New-Item -Path $svcKey -Force | Out-Null
+            New-ItemProperty -Path $svcKey -Name Type -Value 0x10 -PropertyType DWord -Force | Out-Null
+            New-ItemProperty -Path $svcKey -Name Start -Value 2 -PropertyType DWord -Force | Out-Null
+            New-ItemProperty -Path $svcKey -Name ErrorControl -Value 1 -PropertyType DWord -Force | Out-Null
+            New-ItemProperty -Path $svcKey -Name ImagePath -Value $binPath -PropertyType ExpandString -Force | Out-Null
+            New-ItemProperty -Path $svcKey -Name ObjectName -Value 'LocalSystem' -PropertyType String -Force | Out-Null
+            New-ItemProperty -Path $svcKey -Name DisplayName -Value $display -PropertyType String -Force | Out-Null
+        }
         Set-ItemProperty -Path $svcKey -Name ImagePath -Value $binPath -ErrorAction Stop
         Set-ItemProperty -Path $svcKey -Name ObjectName -Value 'LocalSystem' -ErrorAction Stop
         Set-ItemProperty -Path $svcKey -Name Start -Value 2 -Type DWord -ErrorAction Stop
