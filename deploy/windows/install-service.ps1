@@ -20,6 +20,7 @@
 $ErrorActionPreference = 'Stop'
 
 $AgentDir   = 'C:\Program Files\TamperGuard'
+$SetupDir   = 'C:\ProgramData\TamperGuardSetup'
 $StateDir   = 'C:\ProgramData\TamperGuard'
 $PublishDir = 'C:\ProgramData\TamperGuard-publish'
 $AgentSvc   = 'TamperGuardAgent'
@@ -41,9 +42,11 @@ if (Test-Path $AgentDir) {
 
 function Copy-IfNeeded([string]$src, [string]$dst) {
     if (-not (Test-Path $src)) { return }
+    # The one-click wrapper already placed the latest files; never fight a
+    # hardened/ACL-protected destination just to re-copy identical content.
+    if (Test-Path $dst) { return }
     $s = (Resolve-Path -LiteralPath $src).Path
     $d = $dst
-    if (Test-Path $dst) { $d = (Resolve-Path -LiteralPath $dst).Path }
     if ($s -ne $d) {
         Copy-Item -LiteralPath $s -Destination $dst -Force
     }
@@ -53,8 +56,11 @@ function Copy-IfNeeded([string]$src, [string]$dst) {
 Copy-IfNeeded (Join-Path $PSScriptRoot 'ca.crt') (Join-Path $AgentDir 'ca.crt')
 
 # Copy binaries from the extracted bundle next to this script.
+New-Item -ItemType Directory -Force -Path $SetupDir | Out-Null
+icacls $SetupDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX" /T /C | Out-Null
+
 New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
-foreach ($bin in @('tg-agent.exe', 'tg-publish.exe', 'tg-agent-gui.exe')) {
+foreach ($bin in @('tg-agent.exe', 'tg-publish.exe')) {
     Copy-IfNeeded (Join-Path $PSScriptRoot $bin) (Join-Path $AgentDir $bin)
 }
 
@@ -69,24 +75,82 @@ New-Item -ItemType Directory -Force -Path $PublishDir | Out-Null
 
 # SDDL: SYSTEM full; Administrators may query/start but NOT stop (no WP),
 # pause (no DT), reconfigure (no DC) or delete (no SD/WD/WO).
-$sddl = 'D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPLOCRRC;;;BA)(A;;CCLCSWLOCRRC;;;IU)'
+$sddl = 'D:(A;;GA;;;SY)(A;;CCLCSWRPLOCRRC;;;BA)(A;;CCLCSWLOCRRC;;;IU)'
+$permissive = 'D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;IU)'
+
+$script:servicesReset = $false
+function Reset-Services {
+    if ($script:servicesReset) { return }
+    $script:servicesReset = $true
+    Write-Host "existing services are locked; deleting and recreating them as SYSTEM..." -ForegroundColor Yellow
+    $cmdPath = Join-Path $SetupDir 'svc-reset.cmd'
+    $done    = Join-Path $SetupDir 'svc-reset.done'
+    Remove-Item $done -Force -ErrorAction SilentlyContinue
+    $body = @'
+@echo off
+sc stop TamperGuardWatchdog >nul 2>&1
+sc stop TamperGuardAgent >nul 2>&1
+sc stop TamperGuardPublish >nul 2>&1
+timeout /t 3 /nobreak >nul
+sc delete TamperGuardWatchdog >nul 2>&1
+sc delete TamperGuardAgent >nul 2>&1
+sc delete TamperGuardPublish >nul 2>&1
+echo done > "__DONE__"
+'@
+    $body = $body.Replace('__DONE__', $done)
+    Set-Content -LiteralPath $cmdPath -Value $body -Encoding ASCII
+    $taskArgs = '/Create /TN TamperGuardSvcReset /TR "' + $cmdPath + '" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F'
+    $create = Start-Process -FilePath schtasks.exe -ArgumentList $taskArgs -Wait -PassThru -WindowStyle Hidden
+    if ($create.ExitCode -ne 0) { throw "could not create the service reset task (exit $($create.ExitCode))" }
+    Start-Process -FilePath schtasks.exe -ArgumentList '/Run /TN TamperGuardSvcReset' -Wait -WindowStyle Hidden | Out-Null
+    for ($i = 0; $i -lt 60; $i++) {
+        if (Test-Path $done) { break }
+        Start-Sleep -Seconds 1
+    }
+    Start-Process -FilePath schtasks.exe -ArgumentList '/Delete /TN TamperGuardSvcReset /F' -Wait -WindowStyle Hidden | Out-Null
+    for ($i = 0; $i -lt 60; $i++) {
+        $left = @(Get-Service TamperGuardAgent,TamperGuardPublish,TamperGuardWatchdog -ErrorAction SilentlyContinue)
+        if ($left.Count -eq 0) { break }
+        Start-Sleep -Seconds 1
+    }
+}
+
+function Start-ServiceAsSystem([string]$name) {
+    $cmd = Join-Path $SetupDir ("start-" + $name + ".cmd")
+    $done = Join-Path $SetupDir ("start-" + $name + ".done")
+    Remove-Item $done -Force -ErrorAction SilentlyContinue
+    $body = "@echo off`r`nsc start $name >nul 2>&1`r`necho done > `"$done`""
+    Set-Content -LiteralPath $cmd -Value $body -Encoding ASCII
+    $taskArgs = '/Create /TN TamperGuardStart /TR "' + $cmd + '" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F'
+    $create = Start-Process -FilePath schtasks.exe -ArgumentList $taskArgs -Wait -PassThru -WindowStyle Hidden
+    if ($create.ExitCode -ne 0) { throw "could not create start task for $name" }
+    Start-Process -FilePath schtasks.exe -ArgumentList '/Run /TN TamperGuardStart' -Wait -WindowStyle Hidden | Out-Null
+    for ($i = 0; $i -lt 20; $i++) {
+        if (Test-Path $done) { break }
+        Start-Sleep -Seconds 1
+    }
+    Start-Process -FilePath schtasks.exe -ArgumentList '/Delete /TN TamperGuardStart /F' -Wait -WindowStyle Hidden | Out-Null
+}
 
 function Install-Service([string]$name, [string]$display, [string]$binPath) {
     # New-Service takes the command line verbatim (no sc.exe quoting pitfalls
     # with "C:\Program Files\..." paths).
-    if (Get-Service -Name $name -ErrorAction SilentlyContinue) {
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -Name ImagePath -Value $binPath
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -Name ObjectName -Value 'LocalSystem'
-        Set-Service -Name $name -StartupType Automatic
+    $existing = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if ($existing) {
+        # Configure through the registry: Administrators can write it even when
+        # the service ACL denies SERVICE_CHANGE_CONFIG.
+        $svcKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$name"
+        Set-ItemProperty -Path $svcKey -Name ImagePath -Value $binPath -ErrorAction Stop
+        Set-ItemProperty -Path $svcKey -Name ObjectName -Value 'LocalSystem' -ErrorAction Stop
+        Set-ItemProperty -Path $svcKey -Name Start -Value 2 -Type DWord -ErrorAction Stop
+        Write-Host "service $name already exists; configuration updated via registry"
     } else {
         New-Service -Name $name -BinaryPathName $binPath -DisplayName $display -StartupType Automatic | Out-Null
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -Name ObjectName -Value 'LocalSystem'
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -Name ObjectName -Value 'LocalSystem' -ErrorAction Stop
     }
     sc.exe description $name $display | Out-Null
     sc.exe failure $name reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc failure failed for $name (run as Administrator)" }
-    sc.exe sdset $name $sddl | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "sc sdset failed for $name (ACL not hardened; run as Administrator)" }
 }
 
 # 1. Protection agent service.
@@ -108,21 +172,28 @@ Install-Service $Watchdog 'TamperGuard Watchdog' $watchBin
 # 4. Protect program and state directories: SYSTEM full, admins read-only.
 $agentEnrolled = Test-Path (Join-Path $StateDir 'agent.json')
 $publishEnrolled = Test-Path (Join-Path $PublishDir 'agent.json')
-icacls $AgentDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" "Users:(OI)(CI)RX" /T /C | Out-Null
+icacls $AgentDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" "*S-1-5-32-545:(OI)(CI)RX" /T /C | Out-Null
+icacls $agentExe /grant:r "*S-1-5-18:RX" "*S-1-5-32-544:RX" "*S-1-5-32-545:RX" | Out-Null
+if (Test-Path (Join-Path $AgentDir 'tg-agent-gui.exe')) {
+    icacls (Join-Path $AgentDir 'tg-agent-gui.exe') /grant:r "*S-1-5-18:RX" "*S-1-5-32-544:RX" "*S-1-5-32-545:RX" | Out-Null
+}
+if ((Get-Acl $agentExe).Access.Count -eq 0) {
+    throw "ACL on $agentExe is empty after hardening; refusing to leave a non-executable agent"
+}
 # Do not lock a state directory before it has been enrolled: enrolling runs as
 # the administrator and needs to create agent.json there.
 if ($agentEnrolled) {
-    icacls $StateDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" /T /C | Out-Null
+    icacls $StateDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" /T /C | Out-Null
 }
 if ($publishEnrolled) {
-    icacls $PublishDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" /T /C | Out-Null
+    icacls $PublishDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" /T /C | Out-Null
 }
-icacls $StatusDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" "Users:(OI)(CI)RX" /T /C | Out-Null
+icacls $StatusDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" "*S-1-5-32-545:(OI)(CI)RX" /T /C | Out-Null
 
 $started = @()
 if ($agentEnrolled) {
     try {
-        Start-Service $AgentSvc
+        Start-ServiceAsSystem $AgentSvc
         $started += $AgentSvc
     } catch {
         Write-Host "WARN: $AgentSvc did not start: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -132,7 +203,7 @@ if ($agentEnrolled) {
 }
 if ($publishEnrolled) {
     try {
-        Start-Service $PublishSvc
+        Start-ServiceAsSystem $PublishSvc
         $started += $PublishSvc
     } catch {
         Write-Host "WARN: $PublishSvc did not start: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -140,7 +211,7 @@ if ($publishEnrolled) {
 }
 if ($started.Count -gt 0) {
     try {
-        Start-Service $Watchdog
+        Start-ServiceAsSystem $Watchdog
         $started += $Watchdog
     } catch {
         Write-Host "WARN: $Watchdog did not start: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -151,20 +222,34 @@ if ($started.Count -gt 0) {
 
 # 5. Native GUI client (C/S): talks to the service over the local named pipe.
 $guiSrc = Join-Path $PSScriptRoot 'tg-agent-gui.exe'
-$guiDst = Join-Path $AgentDir 'tg-agent-gui.exe'
+$guiDir = 'C:\ProgramData\TamperGuardUi'
+$guiDst = Join-Path $guiDir 'tg-agent-gui.exe'
+New-Item -ItemType Directory -Force -Path $guiDir | Out-Null
 if (Test-Path $guiSrc) {
     Copy-IfNeeded $guiSrc $guiDst
 }
 if (Test-Path $guiDst) {
+    icacls $guiDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" "*S-1-5-32-545:(OI)(CI)RX" /T /C | Out-Null
     $startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\TamperGuardGui.lnk'
     $ws = New-Object -ComObject WScript.Shell
     $shortcut = $ws.CreateShortcut($startup)
     $shortcut.TargetPath = $guiDst
-    $shortcut.WorkingDirectory = $AgentDir
+    $shortcut.WorkingDirectory = $guiDir
     $shortcut.Description = 'TamperGuard GUI client'
     $shortcut.Save()
-    Start-Process -FilePath $guiDst
-    Write-Host "GUI client installed and started (tray + window)" -ForegroundColor Green
+    # Do not start a GUI from the elevated installer: UIPI can deny it, and the
+    # console user should own the tray process. The Startup shortcut starts it at
+    # the next sign-in; it can also be launched manually.
+    Write-Host "GUI shortcut created (starts at next sign-in)." -ForegroundColor Green
+}
+
+if ($agentEnrolled -and $started.Count -gt 0) {
+    foreach ($svcName in ($services + $Watchdog)) {
+        sc.exe sdset $svcName $sddl 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARN: could not harden $svcName ACL (existing ACL kept)" -ForegroundColor Yellow
+        }
+    }
 }
 
 Write-Host "installed services: $($services -join ', ') + $Watchdog" -ForegroundColor Green

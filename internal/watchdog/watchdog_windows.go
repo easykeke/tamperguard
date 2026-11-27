@@ -35,6 +35,7 @@ func Run(opts Options) error {
 	if len(opts.Services) == 0 {
 		return fmt.Errorf("watchdog: no services configured")
 	}
+	log.Printf("watchdog: starting service, protected=%v", opts.Services)
 	return svc.Run("TamperGuardWatchdog", &handler{opts: opts})
 }
 

@@ -12,8 +12,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -45,6 +47,10 @@ func main() {
 	case "enroll":
 		err = cmdEnroll(os.Args[2:])
 	case "run":
+		if handled, serr := tryServiceMode("TamperGuardAgent", os.Args[2:]); handled {
+			err = serr
+			break
+		}
 		err = cmdRun(os.Args[2:])
 	case "probe":
 		err = cmdProbe(os.Args[2:])
@@ -418,6 +424,12 @@ func cmdProbe(args []string) error {
 }
 
 func cmdRun(args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return cmdRunContext(args, ctx)
+}
+
+func cmdRunContext(args []string, ctx context.Context) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	stateDir := fs.String("state-dir", config.DefaultDataDir, "state directory")
 	backend := fs.String("enforcer", "auto", "enforcement backend: auto, ebpf, fanotify or observe")
@@ -433,7 +445,18 @@ func cmdRun(args []string) error {
 	statusDir := fs.String("status-dir", defaultStatusDir(), "directory for the tray status snapshot (empty disables)")
 	_ = fs.Parse(args)
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	var logOut io.Writer = os.Stderr
+	if *statusDir != "" {
+		if err := os.MkdirAll(*statusDir, 0o755); err == nil {
+			logPath := filepath.Join(*statusDir, "agent.log")
+			if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				defer f.Close()
+				_ = exec.Command("icacls", logPath, "/grant", "*S-1-5-32-545:R").Run()
+				logOut = io.MultiWriter(os.Stderr, f)
+			}
+		}
+	}
+	logger := slog.New(slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
 	state, err := config.LoadAgentState(*stateDir)
@@ -475,8 +498,6 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := a.Run(ctx); err != nil {
 		if errors.Is(err, agent.ErrUpgradeStaged) {
 			logger.Info("agent binary upgraded; service manager should restart the process")

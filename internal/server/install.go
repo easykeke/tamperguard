@@ -182,6 +182,7 @@ func (s *Server) handleWindowsInstallPackage(w http.ResponseWriter, r *http.Requ
 	}
 	psQuote := func(v string) string { return strings.ReplaceAll(v, "'", "''") }
 	wrapper := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+try { Start-Transcript -Path (Join-Path $env:TEMP 'tg-install.log') -Append | Out-Null } catch {}
 $Server = '%s'
 $Token  = '%s'
 $Role   = '%s'
@@ -209,7 +210,7 @@ takeown /f "$agentDir" /r /d y 2>$null | Out-Null
 icacls "$agentDir" /reset /T /C 2>$null | Out-Null
 icacls "$agentDir" /grant "*S-1-5-32-544:(OI)(CI)F" "SYSTEM:(OI)(CI)F" /T /C 2>$null | Out-Null
 
-$files = @('tg-agent.exe','tg-publish.exe','tg-agent-gui.exe','install-service.ps1','verify-hardening.ps1','ca.crt')
+$files = @('tg-agent.exe','tg-publish.exe','install-service.ps1','verify-hardening.ps1','ca.crt')
 function Copy-Binaries {
     foreach ($f in $files) {
         if (Test-Path (Join-Path $root $f)) {
@@ -277,14 +278,14 @@ echo done > "C:\Windows\Temp\tg-prep.done"
 }
 
 # First pass registers services without starting or locking state.
-& (Join-Path $agentDir 'install-service.ps1')
+& (Join-Path $root 'install-service.ps1')
 
 if (-not (Test-Path (Join-Path $State 'agent.json'))) {
-    & (Join-Path $agentDir 'tg-agent.exe') enroll --server $Server --bootstrap $Token --ca (Join-Path $agentDir 'ca.crt') --role $Role --state-dir $State
+    & (Join-Path $root 'tg-agent.exe') enroll --server $Server --bootstrap $Token --ca (Join-Path $root 'ca.crt') --role $Role --state-dir $State
 }
 
 # Second pass locks ACLs and starts the enrolled services.
-& (Join-Path $agentDir 'install-service.ps1')
+& (Join-Path $root 'install-service.ps1')
 
 if ($Role -eq 'protect' -and (Test-Path (Join-Path $agentDir 'tg-agent-gui.exe'))) {
     Start-Process (Join-Path $agentDir 'tg-agent-gui.exe')

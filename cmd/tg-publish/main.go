@@ -33,6 +33,10 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "run":
+		if handled, serr := tryServiceMode("TamperGuardPublish", os.Args[2:]); handled {
+			err = serr
+			break
+		}
 		err = cmdRun(os.Args[2:])
 	case "sync":
 		err = cmdSync(os.Args[2:])
@@ -437,6 +441,12 @@ func runWizard(p *publish.Publisher, cfg *publish.SyncOptions) error {
 }
 
 func cmdRun(args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return cmdRunContext(args, ctx)
+}
+
+func cmdRunContext(args []string, ctx context.Context) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	stateDir := fs.String("state-dir", config.DefaultPublishDir, "state directory")
 	verity := fs.Bool("verity", false, "enable fs-verity on the files of every locally installed release")
@@ -456,7 +466,5 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	return p.Run(ctx)
 }
