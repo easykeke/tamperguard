@@ -197,11 +197,26 @@ if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     exit 0
 }
 
-# A previous install hardens the program directory to SYSTEM-only. Stop the
-# old services and give Administrators write access again before copying; this
-# must run as SYSTEM because Administrators no longer hold those rights.
-$prep = 'C:\Windows\Temp\tg-prep.cmd'
-$prepBody = @'
+New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+$files = @('tg-agent.exe','tg-publish.exe','tg-agent-gui.exe','install-service.ps1','verify-hardening.ps1','ca.crt')
+function Copy-Binaries {
+    foreach ($f in $files) {
+        if (Test-Path (Join-Path $root $f)) {
+            try {
+                Copy-Item (Join-Path $root $f) (Join-Path $agentDir $f) -Force -ErrorAction Stop
+            } catch {
+                Write-Host "copy failed: $f :: $($_.Exception.Message)" -ForegroundColor Yellow
+                return $false
+            }
+        }
+    }
+    return $true
+}
+
+if (-not (Copy-Binaries)) {
+    Write-Host "program directory is hardened; reclaiming it as SYSTEM..." -ForegroundColor Yellow
+    $prep = 'C:\Windows\Temp\tg-prep.cmd'
+    $prepBody = @'
 @echo off
 sc stop TamperGuardWatchdog >nul 2>&1
 sc stop TamperGuardAgent >nul 2>&1
@@ -214,21 +229,17 @@ if exist "__STATE__" (
   icacls "__STATE__" /grant "*S-1-5-32-544:(OI)(CI)F" /T >nul 2>&1
 )
 '@
-$prepBody = $prepBody.Replace('__AGENTDIR__', $agentDir).Replace('__STATE__', $State)
-Set-Content -LiteralPath $prep -Value $prepBody -Encoding ASCII
-schtasks /Delete /TN TamperGuardPrep /F >$null 2>&1
-schtasks /Create /TN TamperGuardPrep /TR $prep /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F >$null
-schtasks /Run /TN TamperGuardPrep >$null
-Start-Sleep -Seconds 6
-schtasks /Delete /TN TamperGuardPrep /F >$null 2>&1
-
-New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
-foreach ($f in @('tg-agent.exe','tg-publish.exe','tg-agent-gui.exe','install-service.ps1','verify-hardening.ps1','ca.crt')) {
-    if (Test-Path (Join-Path $root $f)) {
-        for ($i = 0; $i -lt 3; $i++) {
-            try { Copy-Item (Join-Path $root $f) (Join-Path $agentDir $f) -Force -ErrorAction Stop; break }
-            catch { Start-Sleep -Seconds 2 }
-        }
+    $prepBody = $prepBody.Replace('__AGENTDIR__', $agentDir).Replace('__STATE__', $State)
+    Set-Content -LiteralPath $prep -Value $prepBody -Encoding ASCII
+    $taskArgs = '/Create /TN TamperGuardPrep /TR C:\Windows\Temp\tg-prep.cmd /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F'
+    $create = Start-Process -FilePath schtasks.exe -ArgumentList $taskArgs -Wait -PassThru -WindowStyle Hidden
+    if ($create.ExitCode -eq 0) {
+        Start-Process -FilePath schtasks.exe -ArgumentList '/Run /TN TamperGuardPrep' -Wait -WindowStyle Hidden | Out-Null
+        Start-Sleep -Seconds 7
+        Start-Process -FilePath schtasks.exe -ArgumentList '/Delete /TN TamperGuardPrep /F' -Wait -WindowStyle Hidden | Out-Null
+    }
+    if (-not (Copy-Binaries)) {
+        throw "cannot write to $agentDir even after reclaim; close any running agent and retry"
     }
 }
 
