@@ -153,7 +153,7 @@ if ($started.Count -gt 0) {
 $guiSrc = Join-Path $PSScriptRoot 'tg-agent-gui.exe'
 $guiDst = Join-Path $AgentDir 'tg-agent-gui.exe'
 if (Test-Path $guiSrc) {
-    Copy-Item $guiSrc $guiDst -Force
+    Copy-IfNeeded $guiSrc $guiDst
 }
 if (Test-Path $guiDst) {
     $startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\TamperGuardGui.lnk'
