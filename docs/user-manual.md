@@ -1,6 +1,6 @@
 # TamperGuard 用户手册
 
-版本：0.2.5，适用 Linux 服务器与 Windows Server，文档状态：试点可用（见 §0.3）
+版本：0.2.6，适用 Linux 服务器与 Windows Server，文档状态：试点可用（见 §0.3）
 
 ---
 
@@ -154,7 +154,7 @@ sudo cp deploy/systemd/tamperguard-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now tamperguard-server
 sudo journalctl -u tamperguard-server -n 20
-curl -k https://127.0.0.1:8443/healthz     # {"status":"ok","version":"0.2.5"}
+curl -k https://127.0.0.1:8443/healthz     # {"status":"ok","version":"0.2.6"}
 ```
 
 浏览器打开 `https://<控制面IP>:8443/`，用 `admin` + 初始密码登录。**先改密码**（管理端右上角）。

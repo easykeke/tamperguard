@@ -136,7 +136,14 @@ Makefile            make build，产出 bin/ 下三个二进制
 
 ## 许可证
 
-Apache-2.0。
+**PolyForm Shield License 1.0.0**（源码可见，非 OSI 开源许可）。
+
+- 可以免费使用、修改、分发，包括在企业内部用于生产环境；
+- 不得提供与 TamperGuard 竞争的产品或服务；
+- 版权归作者 Vick 所有；商业授权/竞争场景请联系作者；
+- 完整条款见 [LICENSE](LICENSE)，版权声明见 [NOTICE](NOTICE)。
+
+Required Notice: Copyright 2026 Vick (https://github.com/easykeke/tamperguard)
 
 ## 变更记录
 

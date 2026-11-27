@@ -32,7 +32,7 @@ import (
 )
 
 // Version is reported by /healthz and by agents on enrollment.
-const Version = "0.2.5"
+const Version = "0.2.6"
 
 // Options tune optional behaviour.
 type Options struct {
