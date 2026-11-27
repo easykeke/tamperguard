@@ -1503,3 +1503,9 @@ func (s *Store) PurgeNode(id string) error {
 	}
 	return tx.Commit()
 }
+
+// CompleteUninstallForNode closes approved uninstall requests for a node.
+func (s *Store) CompleteUninstallForNode(nodeID string) error {
+	_, err := s.db.Exec(`UPDATE uninstall_requests SET status='completed' WHERE node_id=? AND status='approved'`, nodeID)
+	return err
+}

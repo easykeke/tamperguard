@@ -87,6 +87,7 @@ Two independent authentication schemes share one listener:
 | POST | `/nodes/{id}/degraded-approval` | `{"approved": true}` | Admin explicitly accepts degraded protection |
 | DELETE | `/nodes/{id}` | — | Revokes the node identity (certs rejected afterwards) |
 | DELETE | `/nodes/{id}/record` | — | 删除节点记录（仅离线/已卸载；在线返回 409） |
+| POST | `/nodes/{id}/mark-uninstalled` | — | 手动把离线/卸载中的节点标记为已卸载（兜底） |
 
 ### Policies
 | Method | Path | Body |

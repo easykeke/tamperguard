@@ -598,3 +598,34 @@ func (s *Server) handlePurgeNode(w http.ResponseWriter, r *http.Request) {
 	s.log.Warn("node record purged", "node", id, "by", user)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
+
+// handleNodeMarkUninstalled is the manual fallback when the agent cannot report
+// completion (offline node, or an older agent without the completion callback).
+func (s *Server) handleNodeMarkUninstalled(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	n, err := s.st.GetNode(id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "node not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	n = s.decorateNode(n)
+	if n.Status == "online" {
+		writeErr(w, http.StatusConflict, "conflict", "node is online; let the agent execute the uninstall")
+		return
+	}
+	if err := s.st.CompleteUninstallForNode(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if err := s.st.SetNodeStatus(id, "uninstalled"); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	user, _ := s.sessionUser(r)
+	s.log.Warn("node marked uninstalled by administrator", "node", id, "by", user)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "uninstalled"})
+}

@@ -1,6 +1,6 @@
 # TamperGuard 用户手册
 
-版本：0.2.4，适用 Linux 服务器与 Windows Server，文档状态：试点可用（见 §0.3）
+版本：0.2.5，适用 Linux 服务器与 Windows Server，文档状态：试点可用（见 §0.3）
 
 ---
 
@@ -154,7 +154,7 @@ sudo cp deploy/systemd/tamperguard-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now tamperguard-server
 sudo journalctl -u tamperguard-server -n 20
-curl -k https://127.0.0.1:8443/healthz     # {"status":"ok","version":"0.2.4"}
+curl -k https://127.0.0.1:8443/healthz     # {"status":"ok","version":"0.2.5"}
 ```
 
 浏览器打开 `https://<控制面IP>:8443/`，用 `admin` + 初始密码登录。**先改密码**（管理端右上角）。
@@ -243,6 +243,7 @@ sudo -u tgpublish tg-publish run --state-dir /var/lib/tamperguard-publish
 - 行内「删除」：删除离线/已卸载节点的控制面记录与策略绑定；
 - 顶部「清理离线/已卸载」：批量清理；
 - 在线节点不允许删除（返回 409），必须先卸载或吊销；
+- 若节点长期停留在「卸载中」（离线、票据未消费，或旧版 Agent 无完成回调），可在该行点击「标记已卸载」手动收口；
 - 历史审计与卸载请求记录保留。
 
 ### 4.3 确认上线

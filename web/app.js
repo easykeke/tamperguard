@@ -1757,6 +1757,15 @@ function nodesView(options) {
         },
       }));
     }
+    if (node.status === 'uninstalling') {
+      actionTd.appendChild(button('标记已卸载', {
+        variant: 'ghost',
+        onClick: function (event) {
+          if (event) event.stopPropagation();
+          markUninstalled(node);
+        },
+      }));
+    }
     if (node.status === 'offline' || node.status === 'uninstalled') {
       actionTd.appendChild(button('删除', {
         variant: 'ghost',
@@ -1997,6 +2006,26 @@ function nodesView(options) {
     } catch (err) {
       if (isAborted(err) || err.handled) return;
       toast(err.message || '下发卸载失败。', 'error');
+    }
+  }
+
+  async function markUninstalled(node) {
+    const label = textOr(node.hostname, node.id);
+    const confirmed = await confirmDialog({
+      title: '标记为已卸载',
+      message: '确认节点「' + label + '」已经卸载？',
+      detail: '用于节点离线、无法回调完成状态，或旧版 Agent 没有完成回调的情况。会把该节点的待完成卸载请求标记为完成，并将状态改为“已卸载”。',
+      confirmText: '标记已卸载',
+      danger: true,
+    });
+    if (!confirmed) return;
+    try {
+      await api('POST', '/nodes/' + encodeURIComponent(node.id) + '/mark-uninstalled', { body: {}, signal: ac.signal });
+      toast('节点已标记为已卸载。', 'success');
+      await loadNodes({ silent: true });
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '标记失败。', 'error');
     }
   }
 

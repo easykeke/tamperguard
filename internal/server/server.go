@@ -32,7 +32,7 @@ import (
 )
 
 // Version is reported by /healthz and by agents on enrollment.
-const Version = "0.2.4"
+const Version = "0.2.5"
 
 // Options tune optional behaviour.
 type Options struct {
@@ -214,6 +214,7 @@ func (s *Server) routes() {
 	m.Handle("DELETE /api/v1/nodes/{id}", s.admin(s.handleRevokeNode))
 	m.Handle("POST /api/v1/nodes/{id}/uninstall", s.admin(s.handleNodeUninstall))
 	m.Handle("DELETE /api/v1/nodes/{id}/record", s.admin(s.handlePurgeNode))
+	m.Handle("POST /api/v1/nodes/{id}/mark-uninstalled", s.admin(s.handleNodeMarkUninstalled))
 
 	m.Handle("GET /api/v1/policies", s.admin(s.handleListPolicies))
 	m.Handle("POST /api/v1/policies", s.admin(s.handleCreatePolicy))
