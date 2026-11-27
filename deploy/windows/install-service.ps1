@@ -39,11 +39,6 @@ if (Test-Path $AgentDir) {
     icacls "$AgentDir" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C | Out-Null
 }
 
-# CA certificate, if it was downloaded next to the bundle.
-Copy-IfNeeded (Join-Path $PSScriptRoot 'ca.crt') (Join-Path $AgentDir 'ca.crt')
-
-# Copy binaries from the extracted bundle next to this script.
-New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
 function Copy-IfNeeded([string]$src, [string]$dst) {
     if (-not (Test-Path $src)) { return }
     $s = (Resolve-Path -LiteralPath $src).Path
@@ -54,6 +49,11 @@ function Copy-IfNeeded([string]$src, [string]$dst) {
     }
 }
 
+# CA certificate, if it was downloaded next to the bundle.
+Copy-IfNeeded (Join-Path $PSScriptRoot 'ca.crt') (Join-Path $AgentDir 'ca.crt')
+
+# Copy binaries from the extracted bundle next to this script.
+New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
 foreach ($bin in @('tg-agent.exe', 'tg-publish.exe', 'tg-agent-gui.exe')) {
     Copy-IfNeeded (Join-Path $PSScriptRoot $bin) (Join-Path $AgentDir $bin)
 }
