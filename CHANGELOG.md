@@ -1,5 +1,9 @@
 # 变更记录
 
+## 0.2.7（2026-11-27）
+
+- **管理端支持 Windows 部署**：`tg-server` 新增 Windows 服务协议（`svc.Run`）、平台默认数据目录 `C:\ProgramData\TamperGuardServer`；新增 `install-server-service.ps1`（复制二进制、初始化 CA/管理员/令牌、注册 `TamperGuardServer` 服务、防火墙规则）；服务器证书 SAN 增加本机所有非回环 IP，便于 Agent 用 IP 连接；发布包新增 `tamperguard_<ver>_windows_amd64_server.zip`。
+
 ## 0.2.6（2026-11-27）
 
 - **许可证调整为 PolyForm Shield 1.0.0**：源码可见、允许内部生产使用与修改分发，禁止提供与 TamperGuard 竞争的产品/服务；新增 NOTICE 版权声明。此前 v0.2.5 及更早版本仍按 Apache-2.0 授权，不可追溯撤销。

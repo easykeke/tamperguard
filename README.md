@@ -125,6 +125,7 @@ Makefile            make build，产出 bin/ 下三个二进制
 - [兼容性矩阵](docs/compat.md)：内核、文件系统、RASP 运行时、TLS 证书。
 - [不可变发布模式](docs/immutable.md)：只读镜像 + 滚动发布，以及它与文件级防护的配合方式（`deploy/k8s/immutable/`）。
 - [Windows 部署](deploy/windows/README.md)：无驱动的服务安装、加固与局限。
+- [Windows 部署管理端](docs/windows-server.md)：把控制面作为 Windows 服务安装（ProgramData 数据目录、防火墙、初始化凭据）。
 - [Windows 更强方案评估](docs/windows-stronger-options.md)：CFA、事件驱动自愈、Web 层内容校验、VSS、不可变镜像的对比与选择。
 - [Web 层内容校验](docs/web-verification.md)：tg-proxy 快照 + 逐请求校验，磁盘被改也交付可信内容。
 - [用户手册](docs/user-manual.md)：安装、注册、策略、发布、运维、故障排查与安全边界（试点可用）。

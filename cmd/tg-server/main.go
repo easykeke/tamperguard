@@ -23,6 +23,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"net"
@@ -51,6 +52,10 @@ func main() {
 	case "init":
 		err = cmdInit(os.Args[2:])
 	case "serve":
+		if handled, serr := tryServerService("TamperGuardServer", os.Args[2:]); handled {
+			err = serr
+			break
+		}
 		err = cmdServe(os.Args[2:])
 	case "bootstrap-token":
 		err = cmdBootstrapToken(os.Args[2:])
@@ -85,7 +90,7 @@ func usage() {
 
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	dataDir := fs.String("data-dir", config.DefaultServerDir, "data directory")
 	listen := fs.String("listen", config.DefaultListenAddr, "listen address")
 	_ = fs.Parse(args)
 
@@ -200,11 +205,23 @@ Start the server with: tg-server serve --data-dir %s
 }
 
 func cmdServe(args []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return cmdServeContext(args, ctx)
+}
+
+func cmdServeContext(args []string, ctx context.Context) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	dataDir := fs.String("data-dir", config.DefaultServerDir, "data directory")
 	_ = fs.Parse(args)
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	var logOut io.Writer = os.Stderr
+	logPath := filepath.Join(*dataDir, "server.log")
+	if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		defer f.Close()
+		logOut = io.MultiWriter(os.Stderr, f)
+	}
+	logger := slog.New(slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
 	cfg, err := config.LoadServer(*dataDir)
@@ -221,14 +238,12 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	return srv.Serve(ctx)
 }
 
 func cmdBootstrapToken(args []string) error {
 	fs := flag.NewFlagSet("bootstrap-token", flag.ExitOnError)
-	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	dataDir := fs.String("data-dir", config.DefaultServerDir, "data directory")
 	role := fs.String("role", "protect", "protect or publish")
 	_ = fs.Parse(args)
 	if *role != "protect" && *role != "publish" {
@@ -255,7 +270,7 @@ func cmdBootstrapToken(args []string) error {
 // printed when --password is omitted.
 func cmdResetPassword(args []string) error {
 	fs := flag.NewFlagSet("reset-admin-password", flag.ExitOnError)
-	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	dataDir := fs.String("data-dir", config.DefaultServerDir, "data directory")
 	password := fs.String("password", "", "new password (empty generates a random one)")
 	_ = fs.Parse(args)
 	cfg, err := config.LoadServer(*dataDir)
@@ -285,7 +300,7 @@ func cmdResetPassword(args []string) error {
 // into the release store, records its hash, and prints the signed manifest.
 func cmdRelease(args []string) error {
 	fs := flag.NewFlagSet("release", flag.ExitOnError)
-	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	dataDir := fs.String("data-dir", config.DefaultServerDir, "data directory")
 	binary := fs.String("binary", "", "agent binary to publish")
 	version := fs.String("version", "", "version string, e.g. 0.2.0")
 	osName := fs.String("os", "linux", "target OS")
@@ -401,7 +416,7 @@ func makeServerCert(pub *ecdsa.PublicKey, ca *x509.Certificate, caKey crypto.Sig
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		DNSNames:              []string{"localhost", host, "tg-server"},
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		IPAddresses:           serverCertIPs(),
 	}
 	return x509.CreateCertificate(rand.Reader, tmpl, ca, pub, caKey)
 }
@@ -417,4 +432,34 @@ func randomPassword(n int) string {
 		out[i] = charset[int(buf[i])%len(charset)]
 	}
 	return string(out)
+}
+
+// serverCertIPs includes loopback plus every local unicast address, so agents
+// can connect with https://<ip>:8443 in addition to the hostname.
+func serverCertIPs() []net.IP {
+	out := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			out = append(out, ip)
+		}
+	}
+	return out
 }

@@ -15,11 +15,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
+
+func defaultServerDir() string {
+	if runtime.GOOS == "windows" {
+		return `C:\ProgramData\TamperGuardServer`
+	}
+	return "/var/lib/tamperguard"
+}
+
+// DefaultServerDir is the control-plane data directory. Windows services
+// cannot use /var/lib, so deploy there under ProgramData.
+var DefaultServerDir = defaultServerDir()
 
 // Default locations. These are also what the docs promise.
 const (
 	DefaultDataDir = "/var/lib/tamperguard"
+
 	// DefaultPublishDir is where a publish agent keeps its identity by default;
 	// keeping it separate means `tg-publish sync` works without --state-dir.
 	DefaultPublishDir = "/var/lib/tamperguard-publish"
