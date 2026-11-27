@@ -33,6 +33,12 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 2
 }
 
+# Reclaim the program directory if a previous install hardened it.
+if (Test-Path $AgentDir) {
+    takeown /f "$AgentDir" /r /d y 2>$null | Out-Null
+    icacls "$AgentDir" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C | Out-Null
+}
+
 # CA certificate, if it was downloaded next to the bundle.
 if (Test-Path (Join-Path $PSScriptRoot 'ca.crt')) {
     Copy-Item (Join-Path $PSScriptRoot 'ca.crt') (Join-Path $AgentDir 'ca.crt') -Force

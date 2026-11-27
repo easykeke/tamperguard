@@ -197,9 +197,39 @@ if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     exit 0
 }
 
+# A previous install hardens the program directory to SYSTEM-only. Stop the
+# old services and give Administrators write access again before copying; this
+# must run as SYSTEM because Administrators no longer hold those rights.
+$prep = 'C:\Windows\Temp\tg-prep.cmd'
+$prepBody = @'
+@echo off
+sc stop TamperGuardWatchdog >nul 2>&1
+sc stop TamperGuardAgent >nul 2>&1
+sc stop TamperGuardPublish >nul 2>&1
+timeout /t 2 /nobreak >nul
+takeown /f "__AGENTDIR__" /r /d y >nul 2>&1
+icacls "__AGENTDIR__" /grant "*S-1-5-32-544:(OI)(CI)F" /T >nul 2>&1
+if exist "__STATE__" (
+  takeown /f "__STATE__" /r /d y >nul 2>&1
+  icacls "__STATE__" /grant "*S-1-5-32-544:(OI)(CI)F" /T >nul 2>&1
+)
+'@
+$prepBody = $prepBody.Replace('__AGENTDIR__', $agentDir).Replace('__STATE__', $State)
+Set-Content -LiteralPath $prep -Value $prepBody -Encoding ASCII
+schtasks /Delete /TN TamperGuardPrep /F >$null 2>&1
+schtasks /Create /TN TamperGuardPrep /TR $prep /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F >$null
+schtasks /Run /TN TamperGuardPrep >$null
+Start-Sleep -Seconds 6
+schtasks /Delete /TN TamperGuardPrep /F >$null 2>&1
+
 New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
 foreach ($f in @('tg-agent.exe','tg-publish.exe','tg-agent-gui.exe','install-service.ps1','verify-hardening.ps1','ca.crt')) {
-    if (Test-Path (Join-Path $root $f)) { Copy-Item (Join-Path $root $f) (Join-Path $agentDir $f) -Force }
+    if (Test-Path (Join-Path $root $f)) {
+        for ($i = 0; $i -lt 3; $i++) {
+            try { Copy-Item (Join-Path $root $f) (Join-Path $agentDir $f) -Force -ErrorAction Stop; break }
+            catch { Start-Sleep -Seconds 2 }
+        }
+    }
 }
 
 # First pass registers services without starting or locking state.
