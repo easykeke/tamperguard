@@ -121,6 +121,9 @@ func (s *Server) handleRevokeNode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	if err := s.st.UnassignPolicy(id); err != nil {
+		s.log.Warn("unassign policy on revoke failed", "node", id, "err", err)
+	}
 	if err := s.st.AddRevocation(store.RevokeNode, id, "node revoked by administrator"); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return

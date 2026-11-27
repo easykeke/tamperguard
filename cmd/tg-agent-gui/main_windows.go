@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -45,6 +46,7 @@ var (
 	procAppendMenuW      = user32.NewProc("AppendMenuW")
 	procTrackPopupMenu   = user32.NewProc("TrackPopupMenu")
 	procSetForegroundWnd = user32.NewProc("SetForegroundWindow")
+	procFindWindowW      = user32.NewProc("FindWindowW")
 	procLoadIconW        = user32.NewProc("LoadIconW")
 	procMessageBoxW      = user32.NewProc("MessageBoxW")
 	procSetWindowTextW   = user32.NewProc("SetWindowTextW")
@@ -147,6 +149,21 @@ var (
 	classes   = "TamperGuardGui"
 )
 
+var guiDebug = os.Getenv("TG_GUI_DEBUG") == "1"
+
+func logf(format string, args ...any) {
+	if !guiDebug {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "tamperguard-gui.log"),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, time.Now().Format("15:04:05.000 ")+format+"\n", args...)
+}
+
 func utf16(s string) *uint16 {
 	p, _ := windows.UTF16PtrFromString(s)
 	return p
@@ -157,6 +174,11 @@ func main() {
 
 	mutexName := "Global\\TamperGuardGui"
 	if _, err := windows.CreateMutex(nil, false, utf16(mutexName)); err == windows.ERROR_ALREADY_EXISTS {
+		// Bring the existing window back instead of silently exiting.
+		if hwnd, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16(classes))), 0); hwnd != 0 {
+			procShowWindow.Call(hwnd, swShow)
+			procSetForegroundWnd.Call(hwnd)
+		}
 		return
 	}
 
@@ -204,6 +226,7 @@ func main() {
 		procSendMessageW.Call(uintptr(h), wmSetFont, font, 1)
 	}
 
+	logf("window created hwnd=%d", hwnd)
 	procShowWindow.Call(hwnd, swShow)
 	procUpdateWindow.Call(hwnd)
 
@@ -335,8 +358,10 @@ func lparamX(l uintptr) int32 { return int32(int16(l & 0xffff)) }
 func lparamY(l uintptr) int32 { return int32(int16((l >> 16) & 0xffff)) }
 
 func refresh() {
+	logf("refresh start")
 	st, err := queryStatus()
 	if err != nil {
+		logf("query error: %v", err)
 		haveState = false
 		setEdit("无法连接 TamperGuard 服务。\r\n\r\n" +
 			"可能原因：服务未安装、未启动，或客户端与服务版本不一致。\r\n" +
@@ -358,6 +383,7 @@ func refresh() {
 		short(st.PolicyDigest), st.ServerURL,
 		time.Unix(st.LastHeartbeat, 0).Format("2006-01-02 15:04:05"), age)
 	setEdit(text)
+	logf("query ok agent=%s editlen=%d", st.AgentID, len(text))
 	setTip(fmt.Sprintf("TamperGuard：在线 / %s / %s", st.Enforcer, mode))
 }
 
@@ -372,6 +398,7 @@ func short(s string) string {
 }
 
 func setEdit(text string) {
+	logf("setEdit hwnd=%d len=%d", editWnd, len(text))
 	if editWnd == 0 {
 		return
 	}

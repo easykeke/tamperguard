@@ -1454,3 +1454,13 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
+
+// UnassignPolicy clears the node's policy assignment, so a revoked node does
+// not keep a policy pinned (which would block policy deletion).
+func (s *Store) UnassignPolicy(nodeID string) error {
+	if _, err := s.db.Exec(`DELETE FROM node_policy WHERE node_id=?`, nodeID); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE nodes SET policy_id='' WHERE id=?`, nodeID)
+	return err
+}
