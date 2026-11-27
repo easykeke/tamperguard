@@ -223,10 +223,16 @@ sudo -u tgpublish tg-publish run --state-dir /var/lib/tamperguard-publish
 
 「节点」页顶部新增「Agent 下载与安装」面板：
 
-- **被防护端**：Linux 版单独下载；Windows 只发一个 `tamperguard-windows-amd64.zip`（防护端 + 发布端 + 原生 GUI 客户端 + 安装/自检脚本）；
-- **发布端**：Linux 版单独下载；Windows 发布端已包含在同一个 Windows 安装包中；
-- 下载接口公开只读（`/api/v1/downloads/agent?role=...&os=...&arch=...` 或 `?file=tamperguard-windows-amd64.zip`），二进制由控制面 `<数据目录>/downloads/` 提供；
-- 点「生成安装令牌」后，弹窗给出 Linux 与 Windows 两套注册命令，并附 **CA 证书下载** 链接；Windows 解压后先以管理员运行 `install-service.ps1`，注册完再运行一次。
+- **Windows（推荐）**：点「Windows 一键安装包」，得到已内嵌一次性令牌、CA、二进制和注册脚本的 zip；解压后管理员双击 `install.cmd`，自动完成注册 + 服务安装；
+- **Linux（推荐）**：点「Linux 一键安装命令」，复制弹窗中的一条命令到目标主机执行：
+
+  ```bash
+  curl -fsSLk "https://<控制面>/api/v1/install.sh?role=protect&token=<一次性令牌>" | sudo bash
+  ```
+
+  脚本自动下载 CA 与二进制、注册、写 systemd 并启动；令牌一次性、10 分钟内有效。
+- 也保留手动方式：单独下载 Linux 二进制 + CA，Windows 下载普通安装包后按 §9.5 两段式安装；
+- 下载接口公开只读，二进制由控制面 `<数据目录>/downloads/` 提供。
 
 ### 4.3 确认上线
 
@@ -473,7 +479,9 @@ sudo tg-agent verity enable|digest|check /var/www/site/index.html
 
 ### 9.5 Windows 严格模式与防停止
 
-安装（管理员 PowerShell；先下载 Windows 安装包与 `ca.crt`，放在同一目录）：
+**一键方式**：控制面「Agent 下载与安装」→「Windows 一键安装包」，解压后管理员双击 `install.cmd`。包内已含令牌、CA、二进制和注册脚本，自动完成两段式安装。
+
+手动方式（管理员 PowerShell；下载安装包与 `ca.crt` 放在同一目录）：
 
 ```powershell
 # 1) 注册服务（尚未注册 Agent 时不会启动）

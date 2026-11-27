@@ -1765,6 +1765,20 @@ function nodesView(options) {
   }
 
 
+  async function linuxOneCommand(role) {
+    const isPublish = role === 'publish';
+    try {
+      const res = await api('POST', '/bootstrap-tokens', { body: { role: role }, signal: ac.signal });
+      const url = location.origin + '/api/v1/install.sh?role=' + role + '&token=' + encodeURIComponent(res.token);
+      const cmd = 'curl -fsSLk "' + url + '" | sudo bash';
+      showTicketDialog(isPublish ? 'Linux 发布端一键注册' : 'Linux 被防护端一键注册', res.token,
+        '在目标主机上执行这一条命令：\n\n' + cmd + '\n\n令牌一次性有效，请在 10 分钟内执行。');
+    } catch (err) {
+      if (isAborted(err) || err.handled) return;
+      toast(err.message || '生成一键安装命令失败。', 'error');
+    }
+  }
+
   async function issueAgentToken(role) {
     const isPublish = role === 'publish';
     const title = isPublish ? '发布端安装' : '被防护端安装';
@@ -1810,28 +1824,26 @@ function nodesView(options) {
       box.appendChild(el('h3', 'install-card__title', title));
       box.appendChild(el('p', 'install-card__desc', desc));
       const actions = el('div', 'row-actions');
-      const downloads = [['linux', 'amd64', '下载 Linux 版']];
-      if (role === 'protect') {
-        downloads.push(['bundle', '', '下载 Windows 安装包（含界面）']);
-      }
-      downloads.push(['ca', '', '下载 CA 证书']);
-      downloads.forEach(function (item) {
-        const link = el('a', 'btn btn--sm', item[2]);
-        if (item[0] === 'bundle') {
-          link.href = '/api/v1/downloads/agent?file=tamperguard-windows-amd64.zip';
-        } else if (item[0] === 'ca') {
-          link.href = '/api/v1/downloads/agent?file=ca.crt';
-        } else {
-          link.href = '/api/v1/downloads/agent?role=' + role + '&os=' + item[0] + '&arch=' + item[1];
-        }
-        link.setAttribute('download', '');
-        actions.appendChild(link);
-      });
-      actions.appendChild(button('生成安装令牌', {
+      const win = el('a', 'btn btn--sm btn--primary', 'Windows 一键安装包');
+      win.href = '/api/v1/install/package?role=' + role;
+      win.setAttribute('download', '');
+      actions.appendChild(win);
+
+      actions.appendChild(button('Linux 一键安装命令', {
         variant: 'primary',
         size: 'sm',
-        onClick: function () { issueAgentToken(role); },
+        onClick: function () { linuxOneCommand(role); },
       }));
+
+      const linux = el('a', 'btn btn--sm', '下载 Linux 版');
+      linux.href = '/api/v1/downloads/agent?role=' + role + '&os=linux&arch=amd64';
+      linux.setAttribute('download', '');
+      actions.appendChild(linux);
+
+      const ca = el('a', 'btn btn--sm', '下载 CA 证书');
+      ca.href = '/api/v1/downloads/agent?file=ca.crt';
+      ca.setAttribute('download', '');
+      actions.appendChild(ca);
       box.appendChild(actions);
       return box;
     }
