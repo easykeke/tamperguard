@@ -31,12 +31,20 @@ type handler struct {
 }
 
 // Run starts the Windows service dispatcher.
+func regLog(name, value string) {
+	_ = exec.Command("reg", "add", `HKLM\SOFTWARE\TamperGuard`, "/v", name,
+		"/t", "REG_SZ", "/d", value, "/f").Run()
+}
+
 func Run(opts Options) error {
+	regLog("WatchdogRun", fmt.Sprintf("services=%v", opts.Services))
 	if len(opts.Services) == 0 {
 		return fmt.Errorf("watchdog: no services configured")
 	}
 	log.Printf("watchdog: starting service, protected=%v", opts.Services)
-	return svc.Run("TamperGuardWatchdog", &handler{opts: opts})
+	err := svc.Run("TamperGuardWatchdog", &handler{opts: opts})
+	regLog("WatchdogExit", fmt.Sprintf("err=%v", err))
+	return err
 }
 
 func (h *handler) Execute(args []string, requests <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {

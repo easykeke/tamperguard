@@ -31,6 +31,7 @@ import (
 	"github.com/easykeke/tamperguard/internal/landlock"
 	"github.com/easykeke/tamperguard/internal/selfcheck"
 	"github.com/easykeke/tamperguard/internal/uninstall"
+	"github.com/easykeke/tamperguard/internal/watchdog"
 )
 
 func main() {
@@ -60,6 +61,8 @@ func main() {
 		err = cmdVerity(os.Args[2:])
 	case "selfcheck":
 		err = cmdSelfcheck(os.Args[2:])
+	case "watchdog":
+		err = cmdWatchdog(os.Args[2:])
 	case "ebpf-detach":
 		err = cmdEBPFDetach()
 	case "uninstall":
@@ -96,6 +99,7 @@ func usage() {
   tg-agent landlock [--allow-write DIRS] [--check] -- CMD [ARGS...]
   tg-agent verity  enable|digest|check PATH
   tg-agent selfcheck [--state-dir DIR] (verify the agent's own files)
+  tg-agent watchdog [--service NAME ...] [--agent-dir DIR] [--state-dir DIR]
   tg-agent ebpf-detach               (remove pinned LSM links; maintenance)
   tg-agent uninstall [--state-dir DIR] [--ticket CODE] [--reason TEXT] [--dry-run]
   tg-agent unlock [--state-dir DIR]   (Windows: restore inherited permissions)
@@ -228,6 +232,29 @@ func cmdSelfcheck(args []string) error {
 		fmt.Println("selfcheck: CHANGED", d.String())
 	}
 	return fmt.Errorf("selfcheck: %d file(s) changed", len(diffs))
+}
+
+func cmdWatchdog(args []string) error {
+	fs := flag.NewFlagSet("watchdog", flag.ExitOnError)
+	services := fs.String("service", "TamperGuardAgent,TamperGuardPublish", "comma-separated services to keep running")
+	agentDir := fs.String("agent-dir", `C:\Program Files\TamperGuard`, "agent program directory")
+	stateDir := fs.String("state-dir", `C:\ProgramData\TamperGuard`, "agent state directory")
+	publishDir := fs.String("publish-dir", `C:\ProgramData\TamperGuard-publish`, "publisher state directory")
+	sddl := fs.String("sddl", "", "service security descriptor to re-apply")
+	_ = fs.Parse(args)
+	var list []string
+	for _, s := range strings.Split(*services, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			list = append(list, s)
+		}
+	}
+	return watchdog.Run(watchdog.Options{
+		Services:    list,
+		AgentDir:    *agentDir,
+		StateDir:    *stateDir,
+		PublishDir:  *publishDir,
+		ServiceSDDL: *sddl,
+	})
 }
 
 // cmdEBPFDetach removes the pinned LSM links. Stopping the service does not
