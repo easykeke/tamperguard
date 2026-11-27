@@ -11,7 +11,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
-    image: tamperguard/server:0.2.2
+    image: tamperguard/server:0.2.3
     container_name: tamperguard-server
     restart: unless-stopped
     ports:
