@@ -116,20 +116,11 @@ echo done > "__DONE__"
 }
 
 function Start-ServiceAsSystem([string]$name) {
-    $cmd = Join-Path $SetupDir ("start-" + $name + ".cmd")
-    $done = Join-Path $SetupDir ("start-" + $name + ".done")
-    Remove-Item $done -Force -ErrorAction SilentlyContinue
-    $body = "@echo off`r`nsc start $name >nul 2>&1`r`necho done > `"$done`""
-    Set-Content -LiteralPath $cmd -Value $body -Encoding ASCII
-    $taskArgs = '/Create /TN TamperGuardStart /TR "' + $cmd + '" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F'
-    $create = Start-Process -FilePath schtasks.exe -ArgumentList $taskArgs -Wait -PassThru -WindowStyle Hidden
-    if ($create.ExitCode -ne 0) { throw "could not create start task for $name" }
-    Start-Process -FilePath schtasks.exe -ArgumentList '/Run /TN TamperGuardStart' -Wait -WindowStyle Hidden | Out-Null
-    for ($i = 0; $i -lt 20; $i++) {
-        if (Test-Path $done) { break }
-        Start-Sleep -Seconds 1
+    sc.exe start $name | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARN: sc start $name failed (exit $LASTEXITCODE)" -ForegroundColor Yellow
     }
-    Start-Process -FilePath schtasks.exe -ArgumentList '/Delete /TN TamperGuardStart /F' -Wait -WindowStyle Hidden | Out-Null
+    Start-Sleep -Seconds 2
 }
 
 function Install-Service([string]$name, [string]$display, [string]$binPath) {
@@ -150,7 +141,9 @@ function Install-Service([string]$name, [string]$display, [string]$binPath) {
     }
     sc.exe description $name $display | Out-Null
     sc.exe failure $name reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "sc failure failed for $name (run as Administrator)" }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARN: could not set failure actions for $name (existing ACL); continuing" -ForegroundColor Yellow
+    }
 }
 
 # 1. Protection agent service.
@@ -184,9 +177,15 @@ if ((Get-Acl $agentExe).Access.Count -eq 0) {
 # the administrator and needs to create agent.json there.
 if ($agentEnrolled) {
     icacls $StateDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" /T /C | Out-Null
+    if (Test-Path (Join-Path $StateDir 'agent.json')) {
+        icacls (Join-Path $StateDir 'agent.json') /grant:r "*S-1-5-18:F" "*S-1-5-32-544:RX" | Out-Null
+    }
 }
 if ($publishEnrolled) {
     icacls $PublishDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" /T /C | Out-Null
+    if (Test-Path (Join-Path $PublishDir 'agent.json')) {
+        icacls (Join-Path $PublishDir 'agent.json') /grant:r "*S-1-5-18:F" "*S-1-5-32-544:RX" | Out-Null
+    }
 }
 icacls $StatusDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" "*S-1-5-32-545:(OI)(CI)RX" /T /C | Out-Null
 
@@ -230,6 +229,7 @@ if (Test-Path $guiSrc) {
 }
 if (Test-Path $guiDst) {
     icacls $guiDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)RX" "*S-1-5-32-545:(OI)(CI)RX" /T /C | Out-Null
+    icacls $guiDst /grant:r "*S-1-5-18:F" "*S-1-5-32-544:RX" "*S-1-5-32-545:RX" | Out-Null
     $startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\TamperGuardGui.lnk'
     $ws = New-Object -ComObject WScript.Shell
     $shortcut = $ws.CreateShortcut($startup)

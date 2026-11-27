@@ -15,6 +15,11 @@ import (
 // runUnderServiceManager hands control to the Windows SCM when the process was
 // started as a service. A console run returns handled=false and keeps the normal
 // signal-based path.
+func regLog(name, value string) {
+	_ = exec.Command("reg", "add", `HKLM\SOFTWARE\TamperGuard`, "/v", name,
+		"/t", "REG_SZ", "/d", value, "/f").Run()
+}
+
 func bootLog(format string, args ...any) {
 	f, err := os.OpenFile(`C:\ProgramData\TamperGuardStatus\service-boot.log`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -26,6 +31,7 @@ func bootLog(format string, args ...any) {
 }
 
 func tryServiceMode(name string, args []string) (bool, error) {
+	regLog("Boot", "tryServiceMode "+name)
 	bootLog("tryServiceMode name=%s args=%v", name, args)
 	isService, err := svc.IsWindowsService()
 	bootLog("IsWindowsService=%v err=%v", isService, err)
@@ -64,6 +70,7 @@ func (h *serviceHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, 
 		select {
 		case err := <-done:
 			if err != nil {
+				regLog("LastError", err.Error())
 				serviceLog("service run failed: %v", err)
 				return true, 1
 			}
