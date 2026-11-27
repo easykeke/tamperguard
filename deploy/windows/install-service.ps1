@@ -33,6 +33,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 2
 }
 
+# CA certificate, if it was downloaded next to the bundle.
+if (Test-Path (Join-Path $PSScriptRoot 'ca.crt')) {
+    Copy-Item (Join-Path $PSScriptRoot 'ca.crt') (Join-Path $AgentDir 'ca.crt') -Force
+}
+
 # Copy binaries from the extracted bundle next to this script.
 New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
 foreach ($bin in @('tg-agent.exe', 'tg-publish.exe', 'tg-agent-gui.exe')) {
@@ -56,14 +61,21 @@ New-Item -ItemType Directory -Force -Path $PublishDir | Out-Null
 $sddl = 'D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPLOCRRC;;;BA)(A;;CCLCSWLOCRRC;;;IU)'
 
 function Install-Service([string]$name, [string]$display, [string]$binPath) {
+    # New-Service takes the command line verbatim (no sc.exe quoting pitfalls
+    # with "C:\Program Files\..." paths).
     if (Get-Service -Name $name -ErrorAction SilentlyContinue) {
-        sc.exe config $name binPath= $binPath start= auto obj= LocalSystem | Out-Null
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -Name ImagePath -Value $binPath
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -Name ObjectName -Value 'LocalSystem'
+        Set-Service -Name $name -StartupType Automatic
     } else {
-        sc.exe create $name binPath= $binPath start= auto obj= LocalSystem DisplayName= $display | Out-Null
+        New-Service -Name $name -BinaryPathName $binPath -DisplayName $display -StartupType Automatic | Out-Null
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$name" -Name ObjectName -Value 'LocalSystem'
     }
     sc.exe description $name $display | Out-Null
     sc.exe failure $name reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc failure failed for $name (run as Administrator)" }
     sc.exe sdset $name $sddl | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc sdset failed for $name (ACL not hardened; run as Administrator)" }
 }
 
 # 1. Protection agent service.
@@ -83,16 +95,48 @@ $watchBin = "`"$agentExe`" watchdog --service $($services -join ',') --agent-dir
 Install-Service $Watchdog 'TamperGuard Watchdog' $watchBin
 
 # 4. Protect program and state directories: SYSTEM full, admins read-only.
+$agentEnrolled = Test-Path (Join-Path $StateDir 'agent.json')
+$publishEnrolled = Test-Path (Join-Path $PublishDir 'agent.json')
 icacls $AgentDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" "Users:(OI)(CI)RX" /T /C | Out-Null
-foreach ($dir in @($StateDir, $PublishDir)) {
-    icacls $dir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" /T /C | Out-Null
+# Do not lock a state directory before it has been enrolled: enrolling runs as
+# the administrator and needs to create agent.json there.
+if ($agentEnrolled) {
+    icacls $StateDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" /T /C | Out-Null
+}
+if ($publishEnrolled) {
+    icacls $PublishDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" /T /C | Out-Null
 }
 icacls $StatusDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)RX" "Users:(OI)(CI)RX" /T /C | Out-Null
 
-foreach ($svc in $services) {
-    Start-Service $svc
+$started = @()
+if ($agentEnrolled) {
+    try {
+        Start-Service $AgentSvc
+        $started += $AgentSvc
+    } catch {
+        Write-Host "WARN: $AgentSvc did not start: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "Agent not enrolled yet; service left stopped until you enrol." -ForegroundColor Yellow
 }
-Start-Service $Watchdog
+if ($publishEnrolled) {
+    try {
+        Start-Service $PublishSvc
+        $started += $PublishSvc
+    } catch {
+        Write-Host "WARN: $PublishSvc did not start: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+if ($started.Count -gt 0) {
+    try {
+        Start-Service $Watchdog
+        $started += $Watchdog
+    } catch {
+        Write-Host "WARN: $Watchdog did not start: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "Watchdog left stopped until an agent is enrolled." -ForegroundColor Yellow
+}
 
 # 5. Native GUI client (C/S): talks to the service over the local named pipe.
 $guiSrc = Join-Path $PSScriptRoot 'tg-agent-gui.exe'
@@ -117,7 +161,9 @@ Write-Host "  binary : $agentExe"
 Write-Host "  state  : $StateDir"
 Write-Host "  stop   : denied for Administrators; watchdog restarts within ~3s"
 Write-Host ""
-Write-Host "Next: enrol each agent once (from an elevated shell):" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Next: download ca.crt from the console, place it next to the binaries, then enrol:" -ForegroundColor Cyan
+Write-Host "  (ca.crt download: <console>/api/v1/downloads/agent?file=ca.crt)" -ForegroundColor Cyan
 Write-Host "  & `"$agentExe`" enroll --server https://<control-plane>:8443 --bootstrap <token> --ca <ca.crt> --state-dir `"$StateDir`" --role protect --publisher-sids <publisher-account>"
 if (Test-Path $publishExe) {
     Write-Host "  & `"$agentExe`" enroll --server https://<control-plane>:8443 --bootstrap <publish-token> --ca <ca.crt> --state-dir `"$PublishDir`" --role publish"

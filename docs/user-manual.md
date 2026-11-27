@@ -226,7 +226,7 @@ sudo -u tgpublish tg-publish run --state-dir /var/lib/tamperguard-publish
 - **被防护端**：Linux 版单独下载；Windows 只发一个 `tamperguard-windows-amd64.zip`（防护端 + 发布端 + 原生 GUI 客户端 + 安装/自检脚本）；
 - **发布端**：Linux 版单独下载；Windows 发布端已包含在同一个 Windows 安装包中；
 - 下载接口公开只读（`/api/v1/downloads/agent?role=...&os=...&arch=...` 或 `?file=tamperguard-windows-amd64.zip`），二进制由控制面 `<数据目录>/downloads/` 提供；
-- 点「生成安装令牌」后，弹窗给出 Linux 与 Windows 两套注册命令；Windows 解压后以管理员运行 `install-service.ps1`。
+- 点「生成安装令牌」后，弹窗给出 Linux 与 Windows 两套注册命令，并附 **CA 证书下载** 链接；Windows 解压后先以管理员运行 `install-service.ps1`，注册完再运行一次。
 
 ### 4.3 确认上线
 
@@ -473,11 +473,21 @@ sudo tg-agent verity enable|digest|check /var/www/site/index.html
 
 ### 9.5 Windows 严格模式与防停止
 
-安装（管理员 PowerShell，二进制放在 `C:\Program Files\TamperGuard`）：
+安装（管理员 PowerShell；先下载 Windows 安装包与 `ca.crt`，放在同一目录）：
 
 ```powershell
-.\deploy\windows\install-service.ps1
+# 1) 注册服务（尚未注册 Agent 时不会启动）
+.\install-service.ps1
+
+# 2) 下载 ca.crt 后注册（ca.crt 与 exe 同目录）
+.\tg-agent.exe enroll --server https://<控制面>:8443 --bootstrap <token> `
+  --ca .\ca.crt --role protect --state-dir 'C:\ProgramData\TamperGuard'
+
+# 3) 再跑一次：锁状态目录并启动服务
+.\install-service.ps1
 ```
+
+第二次运行会检测到 `agent.json` 已存在，才会把状态目录收紧为 SYSTEM 完全控制/管理员只读并启动服务；未注册时不会锁目录，避免管理员写不进 `agent.json`。
 
 脚本会创建并加固三个 LocalSystem 服务：
 

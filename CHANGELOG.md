@@ -42,6 +42,8 @@
 
 - **Windows 原生 GUI 客户端（C/S）+ 单一安装包**：新增 `tg-agent-gui.exe`（Win32 窗口 + 托盘），通过命名管道 `\\.\pipe\TamperGuardAgent` 读取 LocalSystem 服务状态并显示，关闭窗口最小化到托盘、退出客户端不影响服务；Windows 下载改为一个 `tamperguard-windows-amd64.zip`（防护端 + 发布端 + GUI + 安装/自检脚本）。原 PowerShell 托盘脚本不再作为界面使用。
 
+- **修复 Windows 注册/安装卡点**：控制面新增公开 CA 下载（`?file=ca.crt`）；安装脚本改用 `New-Service` 写入带空格路径，失败不再静默；未注册时不锁状态目录、不强制启动服务，注册后再跑一次完成加固与启动。
+
 ## 0.2.2（2026-11-26）
 
 新增 Web 层内容校验代理 `tg-proxy` 与控制面签名站点清单：磁盘被篡改时访问者仍拿到可信内容并留痕，签名清单模式使本地磁盘不再参与建立信任。

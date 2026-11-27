@@ -1771,6 +1771,7 @@ function nodesView(options) {
     try {
       const res = await api('POST', '/bootstrap-tokens', { body: { role: role }, signal: ac.signal });
       const server = location.origin;
+      const caURL = server + '/api/v1/downloads/agent?file=ca.crt';
       const linuxDownload = server + '/api/v1/downloads/agent?role=' + role + '&os=linux&arch=amd64';
       const windowsDownload = server + '/api/v1/downloads/agent?role=' + role + '&os=windows&arch=amd64';
       const linuxEnroll = isPublish
@@ -1792,7 +1793,7 @@ function nodesView(options) {
         'Linux 命令：\n' + linuxEnroll + '\n\n' +
         'Windows 下载：' + windowsDownload + '\n' +
         'Windows 命令：\n' + windowsEnroll + '\n\n' +
-        'CA 证书从控制面 <数据目录>/keys/ca.crt 获取，与二进制放在同一目录。';
+        'CA 证书下载：' + caURL + '\n把 ca.crt 与二进制放在同一目录，或用 --ca 指向实际路径。';
       showTicketDialog(title, res.token, detail);
     } catch (err) {
       if (isAborted(err) || err.handled) return;
@@ -1813,10 +1814,13 @@ function nodesView(options) {
       if (role === 'protect') {
         downloads.push(['bundle', '', '下载 Windows 安装包（含界面）']);
       }
+      downloads.push(['ca', '', '下载 CA 证书']);
       downloads.forEach(function (item) {
         const link = el('a', 'btn btn--sm', item[2]);
         if (item[0] === 'bundle') {
           link.href = '/api/v1/downloads/agent?file=tamperguard-windows-amd64.zip';
+        } else if (item[0] === 'ca') {
+          link.href = '/api/v1/downloads/agent?file=ca.crt';
         } else {
           link.href = '/api/v1/downloads/agent?role=' + role + '&os=' + item[0] + '&arch=' + item[1];
         }
@@ -3086,6 +3090,7 @@ function publishView() {
     try {
       const res = await api('POST', '/bootstrap-tokens', { body: { role: 'publish' }, signal: ac.signal });
       const server = location.origin;
+      const caURL = server + '/api/v1/downloads/agent?file=ca.crt';
       const command = 'tg-agent enroll --server ' + server + ' --bootstrap ' + res.token +
         ' --ca ca.crt --role publish --state-dir /var/lib/tamperguard-publish\n\n' +
         '# 注册完成后在发布端主机启动服务：\ntg-publish run --state-dir /var/lib/tamperguard-publish';

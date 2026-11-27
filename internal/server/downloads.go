@@ -6,9 +6,31 @@ import (
 	"path/filepath"
 )
 
+// serveDownload streams a single file with a download disposition.
+func (s *Server) serveDownload(w http.ResponseWriter, r *http.Request, path, name string) {
+	f, err := os.Open(path)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", name+" not found on the control plane")
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
 // handleAgentDownload serves packaged agent binaries for Linux and Windows so
 // the console can offer installers and instructions without shell access.
 func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("file") == "ca.crt" {
+		s.serveDownload(w, r, filepath.Join(s.cfg.DataDir, "keys", "ca.crt"), "ca.crt")
+		return
+	}
 	if file := r.URL.Query().Get("file"); file == "install-service.ps1" || file == "tg-agent-tray.ps1" || file == "verify-hardening.ps1" || file == "tamperguard-windows-amd64.zip" {
 		path := filepath.Join(s.cfg.DataDir, "downloads", file)
 		f, err := os.Open(path)
