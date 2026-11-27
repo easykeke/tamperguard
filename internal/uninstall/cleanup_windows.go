@@ -23,17 +23,27 @@ func Perform(ctx context.Context, opts Options) ([]string, error) {
 	if opts.DryRun {
 		return []string{"dry-run: would stop/delete services and remove files as SYSTEM"}, nil
 	}
+	agentDir := filepath.Dir(opts.BinaryPath)
 	script := fmt.Sprintf(`@echo off
+taskkill /f /im tg-agent-gui.exe >nul 2>&1
 sc stop TamperGuardWatchdog >nul 2>&1
-sc delete TamperGuardWatchdog >nul 2>&1
 sc stop TamperGuardAgent >nul 2>&1
-sc delete TamperGuardAgent >nul 2>&1
 sc stop TamperGuardPublish >nul 2>&1
+sc delete TamperGuardWatchdog >nul 2>&1
+sc delete TamperGuardAgent >nul 2>&1
 sc delete TamperGuardPublish >nul 2>&1
-timeout /t 2 /nobreak >nul
+reg delete "HKLM\SYSTEM\CurrentControlSet\Services\TamperGuardWatchdog" /f >nul 2>&1
+reg delete "HKLM\SYSTEM\CurrentControlSet\Services\TamperGuardAgent" /f >nul 2>&1
+reg delete "HKLM\SYSTEM\CurrentControlSet\Services\TamperGuardPublish" /f >nul 2>&1
+timeout /t 3 /nobreak >nul
 del /f /q "%s" >nul 2>&1
 rmdir /s /q "%s" >nul 2>&1
-`, opts.BinaryPath, opts.StateDir)
+rmdir /s /q "%s" >nul 2>&1
+rmdir /s /q "C:\ProgramData\TamperGuardUi" >nul 2>&1
+rmdir /s /q "C:\ProgramData\TamperGuardStatus" >nul 2>&1
+rmdir /s /q "C:\ProgramData\TamperGuardSetup" >nul 2>&1
+del /f /q "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\TamperGuardGui.lnk" >nul 2>&1
+`, opts.BinaryPath, opts.StateDir, agentDir)
 	bat := filepath.Join(os.TempDir(), fmt.Sprintf("tg-uninstall-%d.cmd", os.Getpid()))
 	if err := os.WriteFile(bat, []byte(script), 0o600); err != nil {
 		return nil, err
