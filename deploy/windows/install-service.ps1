@@ -40,17 +40,22 @@ if (Test-Path $AgentDir) {
 }
 
 # CA certificate, if it was downloaded next to the bundle.
-if (Test-Path (Join-Path $PSScriptRoot 'ca.crt')) {
-    Copy-Item (Join-Path $PSScriptRoot 'ca.crt') (Join-Path $AgentDir 'ca.crt') -Force
-}
+Copy-IfNeeded (Join-Path $PSScriptRoot 'ca.crt') (Join-Path $AgentDir 'ca.crt')
 
 # Copy binaries from the extracted bundle next to this script.
 New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
-foreach ($bin in @('tg-agent.exe', 'tg-publish.exe', 'tg-agent-gui.exe')) {
-    $src = Join-Path $PSScriptRoot $bin
-    if (Test-Path $src) {
-        Copy-Item $src (Join-Path $AgentDir $bin) -Force
+function Copy-IfNeeded([string]$src, [string]$dst) {
+    if (-not (Test-Path $src)) { return }
+    $s = (Resolve-Path -LiteralPath $src).Path
+    $d = $dst
+    if (Test-Path $dst) { $d = (Resolve-Path -LiteralPath $dst).Path }
+    if ($s -ne $d) {
+        Copy-Item -LiteralPath $s -Destination $dst -Force
     }
+}
+
+foreach ($bin in @('tg-agent.exe', 'tg-publish.exe', 'tg-agent-gui.exe')) {
+    Copy-IfNeeded (Join-Path $PSScriptRoot $bin) (Join-Path $AgentDir $bin)
 }
 
 $agentExe = Join-Path $AgentDir 'tg-agent.exe'
